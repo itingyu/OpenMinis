@@ -139,7 +139,13 @@ class SessionTitleRegenerator(
                         )
                         return@walk null
                     }
-                    chatRepository.updateSessionTitleAndCategory(id, title, category)
+                    // [T-title-date-prefix] Keep the user's date stamp after
+                    // the model names the chat.
+                    chatRepository.updateSessionTitleAndCategory(
+                        id,
+                        com.openminis.app.data.prefs.SessionTitleDatePrefix.decorate(context, title),
+                        category,
+                    )
                     AppLogger.info(
                         "TitleGen",
                         "outcome=set origin=$origin session=${id.take(8)} " +
