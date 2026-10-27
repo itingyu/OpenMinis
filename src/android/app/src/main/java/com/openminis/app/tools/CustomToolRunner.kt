@@ -51,7 +51,7 @@ object CustomToolRunner {
         }
         // Any placeholder left over would otherwise be passed through literally
         // and the model would get a confusing empty result.
-        val leftover = Regex("\\{\\{([A-Za-z0-9_]+)}}").findAll(command)
+        val leftover = Regex("""\{\{([A-Za-z0-9_]+)\}\}""").findAll(command)
             .map { it.groupValues[1] }.toSet()
         if (leftover.isNotEmpty()) {
             return ToolExecutionResult(
@@ -60,6 +60,13 @@ object CustomToolRunner {
         }
 
         val env = values.mapKeys { (k, _) -> "TOOL_ARG_" + envName(k) }
+
+        // [T-custom-tools-boot] A custom tool can be the first thing that runs
+        // after a cold start; the sandbox is booted lazily by the normal shell
+        // path, which this one bypasses — ShellExecutor's `check(isBooted)`
+        // then aborts the call with nothing the user can act on.
+        runCatching { com.openminis.app.sandbox.PRootKernel.boot(context.applicationContext) }
+            .onFailure { return ToolExecutionResult("Error: sandbox failed to start: ${it.message}", false) }
 
         val result = try {
             ShellExecutor.execute(
