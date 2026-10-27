@@ -240,6 +240,53 @@ internal fun InlineVoiceInputPanel(
     var transcript by remember { mutableStateOf(inputText) }
     var isEditing by remember { mutableStateOf(false) }
 
+    // [fix-local-stt-oem] Some ROMs never expose a RecognitionService to
+    // third-party apps (the recognizer exists and every other app's dictation
+    // works), so no engine reports usable. ACTION_RECOGNIZE_SPEECH still
+    // resolves — the system shows its own voice UI and hands back text — so
+    // offer that instead of a dead end. Registered unconditionally: a
+    // rememberLauncherForActivityResult must not sit behind an early return.
+    val systemVoiceUi = remember {
+        SpeechRecognitionManager.systemVoiceUiAvailable(panelContext)
+    }
+    val systemUiLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            val heard = result.data
+                ?.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS)
+                ?.firstOrNull()
+                .orEmpty()
+                .trim()
+            if (heard.isNotEmpty()) {
+                val base = transcript
+                val sep = if (base.isEmpty() || base.endsWith(" ")) "" else " "
+                val joined = base + sep + heard
+                transcript = joined
+                onInputTextChange(joined)
+                VoiceSendGate.transcript = joined
+                VoiceModePrefs.expanded = true
+            }
+        }
+    }
+    val launchSystemVoiceUi: () -> Unit = {
+        val intent = android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(
+                android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM,
+            )
+            putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE, locale.toLanguageTag())
+            putExtra(android.speech.RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+        }
+        runCatching { systemUiLauncher.launch(intent) }.onFailure {
+            android.widget.Toast.makeText(
+                panelContext,
+                panelContext.getString(R.string.voice_panel_no_engine_title),
+                android.widget.Toast.LENGTH_SHORT,
+            ).show()
+        }
+    }
+
     // [T-android-context-usage-hint] The usage line currently occupying the
     // status row, cleared when its 3.5s spell expires.
     //
@@ -617,6 +664,8 @@ internal fun InlineVoiceInputPanel(
         VoiceEngineUnavailableNotice(
             expanded = expanded,
             onToggleExpanded = { persistExpanded(!expanded) },
+            onSystemVoiceUi = if (systemVoiceUi) launchSystemVoiceUi else null,
+            diagnostics = remember { SpeechRecognitionManager.systemSpeechDiagnostics(panelContext) },
             modifier = modifier,
         )
         return
@@ -1484,6 +1533,8 @@ private fun statusLabel(
 private fun VoiceEngineUnavailableNotice(
     expanded: Boolean,
     onToggleExpanded: () -> Unit,
+    onSystemVoiceUi: (() -> Unit)? = null,
+    diagnostics: String? = null,
     modifier: Modifier = Modifier,
 ) {
     val ctx = androidx.compose.ui.platform.LocalContext.current
@@ -1524,6 +1575,22 @@ private fun VoiceEngineUnavailableNotice(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
         )
 
+        // [fix-local-stt-oem] Concrete probe results, so "doesn't work" becomes
+        // a diagnosable fact (no recognizer at all vs. an engine that fails).
+        if (!diagnostics.isNullOrBlank()) {
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = diagnostics,
+                style = TextStyle(
+                    fontSize = 10.sp,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                ),
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+            )
+        }
+
         Spacer(modifier = Modifier.height(12.dp))
 
         Row(
@@ -1559,6 +1626,20 @@ private fun VoiceEngineUnavailableNotice(
                             android.net.Uri.parse("minis://settings/providers"),
                         ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
                     )
+                }
+            }
+        }
+
+        // [fix-local-stt-oem] Local fallback on ROMs that hide their
+        // RecognitionService from us but still ship a speech-input UI.
+        if (onSystemVoiceUi != null) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center,
+            ) {
+                NoticeActionButton(stringResource(R.string.voice_panel_use_system_ui)) {
+                    onSystemVoiceUi()
                 }
             }
         }

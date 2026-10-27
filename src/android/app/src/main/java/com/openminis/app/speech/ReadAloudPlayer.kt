@@ -151,6 +151,21 @@ class ReadAloudPlayer(context: Context) {
     @Volatile
     private var capturePaused = false
 
+    /**
+     * [fix-readaloud-resume] The sentence the worker is speaking right now.
+     *
+     * Neither engine can pause mid-utterance, so a dictation turn abandons the
+     * current sentence. Before this field existed only the *unqueued* text was
+     * held for resume, which meant switching voice → keyboard mid-sentence
+     * lost that sentence entirely and resumed from the next one — heard as
+     * "switching input cuts read-aloud off". Remembering the sentence lets
+     * [resumeAfterCapture] replay it from the start.
+     *
+     * Main-thread confined: the worker runs on Dispatchers.Main.immediate and
+     * suspend/resume are driven from the recognizer's state flow on main.
+     */
+    private var currentUtterance: String? = null
+
     private val linkPhrases by lazy {
         VoiceTextSanitizer.LinkPhrases(
             linkToHost = appContext.getString(R.string.voice_link_to_host),
@@ -166,10 +181,12 @@ class ReadAloudPlayer(context: Context) {
         VoiceOutputState.registerPlayer(this)
         worker = scope.launch {
             for (text in queue) {
+                currentUtterance = text
                 try {
                     runCatching { speakOne(text) }
                         .onFailure { AppLogger.error(TAG, "utterance failed: $it") }
                 } finally {
+                    if (currentUtterance == text) currentUtterance = null
                     // [T-readaloud-focus] Every utterance ends here — done,
                     // failed, or cancelled — so focus can never outlive it by
                     // more than the window. The next sentence starting inside
@@ -312,8 +329,39 @@ class ReadAloudPlayer(context: Context) {
      * queued behind it is preserved and re-queued on resume.
      */
     fun suspendForCapture() {
-        if (capturePaused) return
+        if (!pauseAndHold()) return
+        // Capture owns the audio route: drop focus so the recognizer can take
+        // it without a ducking fight.
+        focus.releaseNow(this)
+        AppLogger.info(TAG, "suspended for mic capture — held ${heldForCapture.size} utterance(s)")
+    }
+
+    /**
+     * [fix-readaloud-focus-pause] Pause for a TRANSIENT audio-focus loss
+     * (another app is speaking — a navigation prompt, the IME's voice keyboard,
+     * a call notification) WITHOUT releasing focus: the holder keeps its
+     * request so Android sends AUDIOFOCUS_GAIN when the other app is done, and
+     * [resumeAfterCapture] picks the queue back up.
+     *
+     * Before this, every focus loss other than CAN_DUCK ran the full [stop],
+     * which drops the queue and is unrecoverable — so a momentary interruption
+     * silently killed the rest of the reply.
+     */
+    fun suspendForInterruption() {
+        if (!pauseAndHold()) return
+        AppLogger.info(TAG, "suspended for audio focus — held ${heldForCapture.size} utterance(s)")
+    }
+
+    /** @return false when already paused (nothing changed). */
+    private fun pauseAndHold(): Boolean {
+        if (capturePaused) return false
         capturePaused = true
+        // [fix-readaloud-resume] The sentence being spoken when the mic opened
+        // is lost by the engine teardown below; hold it too so the user hears
+        // it again once capture ends, instead of the narration jumping to the
+        // next sentence (or going silent when it was the last one).
+        val interrupted = currentUtterance
+        currentUtterance = null
         // Drain into the holding list rather than onto the floor.
         val held = mutableListOf<String>()
         while (true) {
@@ -325,18 +373,20 @@ class ReadAloudPlayer(context: Context) {
         sentenceBuffer.setLength(0)
         if (tail.isNotEmpty()) held.add(tail)
         heldForCapture.addAll(held)
+        if (!interrupted.isNullOrBlank() && heldForCapture.none { it == interrupted }) {
+            heldForCapture.add(0, interrupted)
+        }
 
         playbackFinisher?.invoke()
         releasePlayer()
         system.stop()
-        focus.releaseNow(this)
         pending.set(0)
         _isSpeaking.value = false
         if (ownsCapsule()) {
             VoiceOutputState.isSpeaking.value = false
             VoiceOutputState.isSynthesizing.value = false
         }
-        AppLogger.info(TAG, "suspended for mic capture — held ${heldForCapture.size} utterance(s)")
+        return true
     }
 
     /** Re-queue whatever [suspendForCapture] held back. */
@@ -357,6 +407,7 @@ class ReadAloudPlayer(context: Context) {
     fun stop() {
         // A real stop supersedes a capture pause: nothing held is still wanted.
         capturePaused = false
+        currentUtterance = null
         heldForCapture.clear()
         sentenceBuffer.setLength(0)
         while (queue.tryReceive().isSuccess) { /* drain */ }
@@ -559,7 +610,12 @@ class ReadAloudPlayer(context: Context) {
                 // the OUTER runCatching which skipped the utterance entirely.
                 // Now a ROM that rejects the speed change still plays at 1×;
                 // only the speed is lost, never the audio.
-                focus.acquire(this@ReadAloudPlayer, onFocusLost)
+                focus.acquireWithPause(
+                    this@ReadAloudPlayer,
+                    onFocusLost,
+                    onSuspend = { suspendForInterruption() },
+                    onResume = { resumeAfterCapture() },
+                )
                 mp.start()
                 val speed = VoiceOutputState.speed.value
                 if (speed != 1.0f) {
@@ -612,7 +668,12 @@ class ReadAloudPlayer(context: Context) {
             VoiceOutputState.activeModelLabel.value = VoiceOutputState.systemVoiceLabel.value
         }
         // [T-readaloud-focus] The system engine now ducks other apps too.
-        focus.acquire(this, onFocusLost)
+        focus.acquireWithPause(
+            this,
+            onFocusLost,
+            onSuspend = { suspendForInterruption() },
+            onResume = { resumeAfterCapture() },
+        )
         system.speak(text)
         // [T-android-tts-rom-compat] speak() may have been REJECTED by the
         // engine (missing language data on AOSP/OEM engines) — the manager

@@ -312,6 +312,53 @@ object SpeechRecognitionManager {
 
     fun availableEngines(): List<SpeechRecognitionEngine> = engines.toList()
 
+    /**
+     * [fix-local-stt-oem] True when the device has an app that handles
+     * [android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH].
+     *
+     * This is the last-resort local STT path on ROMs whose RecognitionService
+     * refuses third-party binding (or is not visible to us): the intent is
+     * resolved by the system, so the OEM recognizer's own UI does the work and
+     * returns text. The voice panel offers it when no engine reports usable.
+     */
+    /**
+     * [fix-local-stt-oem] One-line, user-visible probe summary shown under the
+     * "no engine" notice. Without it every report is "it doesn't work": this
+     * says whether the ROM exposes a recognizer at all.
+     */
+    fun systemSpeechDiagnostics(context: Context): String {
+        val ctx = if (::appContext.isInitialized) appContext else context.applicationContext
+        val pm = ctx.packageManager
+        val available = runCatching {
+            android.speech.SpeechRecognizer.isRecognitionAvailable(ctx)
+        }.getOrDefault(false)
+        val services = runCatching {
+            pm.queryIntentServices(
+                android.content.Intent(android.speech.RecognitionService.SERVICE_INTERFACE), 0,
+            )
+        }.getOrDefault(emptyList()).size
+        val ui = runCatching {
+            pm.queryIntentActivities(
+                android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+                    .setType("text/plain"), 0,
+            )
+        }.getOrDefault(emptyList()).size
+        val component = runCatching {
+            android.provider.Settings.Secure.getString(ctx.contentResolver, "voice_recognition_service")
+        }.getOrNull()
+        return "isRecognitionAvailable=$available · RecognitionService=$services · " +
+            "ACTION_RECOGNIZE_SPEECH=$ui · default=${component ?: "none"}"
+    }
+
+    fun systemVoiceUiAvailable(context: Context): Boolean {        val ctx = if (::appContext.isInitialized) appContext else context.applicationContext
+        val intent = android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+            .setType("text/plain")
+        val activities = runCatching {
+            ctx.packageManager.queryIntentActivities(intent, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY)
+        }.getOrDefault(emptyList())
+        return activities.isNotEmpty()
+    }
+
     private val noAsrStall = MutableStateFlow(false).asStateFlow()
 
     /**

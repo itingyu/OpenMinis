@@ -68,7 +68,11 @@ class ReadAloudAudioFocus internal constructor(
         fun schedule(delayMs: Long, block: () -> Unit): () -> Unit
     }
 
-    private class Owner(var onLost: () -> Unit) {
+    private class Owner(
+        var onLost: () -> Unit,
+        var onSuspend: (() -> Unit)? = null,
+        var onResume: (() -> Unit)? = null,
+    ) {
         var cancelGrace: (() -> Unit)? = null
     }
 
@@ -79,6 +83,9 @@ class ReadAloudAudioFocus internal constructor(
     var isHeld: Boolean = false
         private set
 
+    /** [fix-readaloud-focus-pause] Between a TRANSIENT loss and the GAIN that follows it. */
+    private var suspendedByFocus: Boolean = false
+
     val ownerCount: Int get() = owners.size
 
     init {
@@ -87,8 +94,25 @@ class ReadAloudAudioFocus internal constructor(
 
     /** Audio is about to start for [owner]; [onLost] is called if focus is taken away. */
     fun acquire(owner: Any, onLost: () -> Unit) {
+        acquireWithPause(owner, onLost, onSuspend = null, onResume = null)
+    }
+
+    /**
+     * [fix-readaloud-focus-pause] Same as [acquire], plus callbacks for a
+     * TRANSIENT loss (another app speaking) and the GAIN that ends it. Kept as
+     * its own name so the existing two-argument call form — including the
+     * trailing-lambda form in the tests — stays unambiguous.
+     */
+    fun acquireWithPause(
+        owner: Any,
+        onLost: () -> Unit,
+        onSuspend: (() -> Unit)?,
+        onResume: (() -> Unit)?,
+    ) {
         val entry = owners.getOrPut(owner) { Owner(onLost) }
         entry.onLost = onLost
+        if (onSuspend != null) entry.onSuspend = onSuspend
+        if (onResume != null) entry.onResume = onResume
         entry.cancelGrace?.invoke()
         entry.cancelGrace = null
         armWatchdog()
@@ -147,15 +171,36 @@ class ReadAloudAudioFocus internal constructor(
 
     private fun onFocusChange(change: Int) {
         when (change) {
-            AudioManager.AUDIOFOCUS_LOSS, AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+            AudioManager.AUDIOFOCUS_LOSS -> {
                 log("focus lost ($change) — stopping read-aloud")
+                suspendedByFocus = false
                 // Snapshot: onLost -> player.stop() -> releaseNow mutates owners.
                 val lost = owners.values.map { it.onLost }
                 lost.forEach { runCatching { it() } }
                 abandon("lost $change")
             }
+            // [fix-readaloud-focus-pause] Another app is speaking for a while
+            // (call, IME voice keyboard, navigation prompt). Pause and KEEP the
+            // queue instead of running stop(): Android sends AUDIOFOCUS_GAIN
+            // when the other app is done, and that resumes the narration.
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+                log("focus transiently lost ($change) — pausing read-aloud, queue kept")
+                suspendedByFocus = true
+                // Keep ownership: the grace timer must not drop the last owner
+                // (and abandon focus) while the other app is still talking.
+                owners.values.forEach { it.cancelGrace?.invoke(); it.cancelGrace = null }
+                val suspend = owners.values.mapNotNull { it.onSuspend }
+                suspend.forEach { runCatching { it() } }
+            }
             // A short prompt (navigation, notification): keep reading.
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> log("transient duck request — continuing")
+            AudioManager.AUDIOFOCUS_GAIN -> {
+                if (!suspendedByFocus) return
+                suspendedByFocus = false
+                log("focus regained — resuming read-aloud")
+                val resume = owners.values.mapNotNull { it.onResume }
+                resume.forEach { runCatching { it() } }
+            }
             else -> Unit
         }
     }

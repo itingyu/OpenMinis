@@ -2,12 +2,14 @@ package com.openminis.app.speech
 
 import android.Manifest
 import android.content.BroadcastReceiver
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.media.AudioFormat
 import android.os.Build
+import android.provider.Settings
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -48,13 +50,33 @@ class SystemSpeechRecognitionEngine(private val appContext: Context) : SpeechRec
 
     override val isAvailable: Boolean
         get() {
-            if (degraded) return false
-            // Two-layer probe. The first returns true on many Chinese ROMs
-            // that actually ship no real service — the intent query is the
-            // backstop. Both cheap.
+            // [fix-vivo-plain-session] A runtime failure no longer hides the
+            // mic for the whole process: the service still exists, and hiding
+            // it turned one failed attempt into a dead UI with no way to retry
+            // (and no explanation). Every start() re-probes; the panel shows
+            // the real error instead.
+            // [fix-local-stt-oem] Two independent probes, OR-ed.
+            //
+            // Historically this was `systemSaysYes && services.isNotEmpty()`
+            // (AND). The service query is meaningless on several Chinese ROMs:
+            // the OEM recognizer is installed and works, but its service is not
+            // visible to third-party callers at query time, so the AND returned
+            // false and the voice panel showed "no recognition engine" on a
+            // device whose dictation button works in every other app.
+            //
+            // Either signal is enough to let the user TRY; a genuinely broken
+            // service still fails at start(), which marks the engine degraded
+            // and surfaces the real cause. Refusing to try was the worse
+            // failure mode.
             val systemSaysYes = try { SpeechRecognizer.isRecognitionAvailable(appContext) }
                 catch (_: Throwable) { false }
-            if (!systemSaysYes) return false
+            if (systemSaysYes) return true
+            // A configured component is proof the ROM has an engine, even when
+            // both probes above are blinded by package visibility.
+            defaultRecognizerComponent?.let { component ->
+                val present = runCatching { appContext.packageManager.getServiceInfo(component, 0) }.isSuccess
+                if (present) return true
+            }
             val intent = Intent(RecognitionService.SERVICE_INTERFACE)
             val services = try {
                 appContext.packageManager.queryIntentServices(intent, 0)
@@ -153,7 +175,18 @@ class SystemSpeechRecognitionEngine(private val appContext: Context) : SpeechRec
         // reading. When we can't, the recogniser opens the mic itself and no
         // VAD runs — see startEndpointingVad.
         segmentTranscript.setLength(0)
-        startEndpointingVad()
+        degraded = false
+        plainRetryDone = false
+        refreshCandidates()
+        // [fix-vivo-plain-session] OEM recognizers are tried in the plainest
+        // possible mode from the FIRST attempt: an injected-audio session is
+        // the most likely thing a vendor service rejects with ERROR_CLIENT.
+        plainSession = shouldUsePlainSession()
+        if (plainSession) {
+            Log.i(TAG, "OEM recognizer — starting a plain session (recognizer owns the mic, no extras)")
+        } else {
+            startEndpointingVad()
+        }
         // [T-android-continuous-dictation] Only when we own the capture can we
         // survive the platform's ~1.5 s cut: restarting the recogniser is
         // harmless because the mic never changes hands. If the recogniser owns
@@ -281,6 +314,26 @@ class SystemSpeechRecognitionEngine(private val appContext: Context) : SpeechRec
     /** Locale of the running dictation, so a restart reuses it. */
     @Volatile
     private var continuousLocale: Locale? = null
+
+    /**
+     * [fix-vivo-plain-session] True when this dictation is being run in the
+     * conservative mode: no EXTRA_AUDIO_SOURCE, no EXTRA_SEGMENTED_SESSION,
+     * recognizer owns the mic.
+     *
+     * Some OEM recognizers (vivo CopilotRecognitionService is the known one)
+     * answer ERROR_CLIENT to an injected-audio session even though the service
+     * itself works. Because ERROR_CLIENT maps to OEM_NO_SERVICE, the old code
+     * marked the engine permanently degraded on that first reply, so the mic
+     * button vanished for the rest of the process. One plain retry separates
+     * "this ROM refuses third-party apps" from "this ROM doesn't support audio
+     * injection", and only the former should degrade.
+     */
+    @Volatile
+    private var plainSession: Boolean = false
+
+    /** One plain retry per dictation. */
+    @Volatile
+    private var plainRetryDone: Boolean = false
 
     /**
      * Text committed by earlier segments of this dictation. Each restart makes
@@ -557,6 +610,86 @@ class SystemSpeechRecognitionEngine(private val appContext: Context) : SpeechRec
      * (SODA) recognizer answers ERROR_LANGUAGE_UNAVAILABLE we restart once with
      * it false, which forces the regular (typically cloud) recognizer.
      */
+    /**
+     * [fix-local-stt-oem] The recognizer component Android is configured with,
+     * read from Settings.Secure ("voice_recognition_service").
+     *
+     * Package visibility hides most OEM RecognitionServices from
+     * queryIntentServices on Chinese ROMs, but an EXPLICIT ComponentName still
+     * binds: Settings.Secure is readable without a permission and the binding
+     * does not go through the visibility check. This is the only way to reach
+     * a service the ROM did not export to third-party discovery.
+     */
+    private val defaultRecognizerComponent: ComponentName? by lazy {
+        runCatching {
+            val flat = Settings.Secure.getString(
+                appContext.contentResolver,
+                "voice_recognition_service",
+            ) ?: return@runCatching null
+            ComponentName.unflattenFromString(flat)
+        }.getOrNull()
+    }
+
+    /** Create a recognizer bound to the |configured| component when there is one. */
+    /**
+     * [fix-stt-candidates] Every recognition service this app can see, the
+     * configured default first.
+     *
+     * A ROM's default recognizer can refuse third-party callers (vivo's
+     * CopilotRecognitionService answers ERROR_CLIENT to every start) while a
+     * user-installed engine — Marmalade STT, Google's, anything exposing
+     * RecognitionService — works fine. Picking one component up front and
+     * dying on it made the whole feature look broken; now a refusal falls
+     * through to the next engine.
+     */
+    @Volatile
+    private var candidates: List<ComponentName> = emptyList()
+
+    @Volatile
+    private var candidateIdx: Int = 0
+
+    private fun refreshCandidates() {
+        val out = LinkedHashMap<String, ComponentName>()
+        defaultRecognizerComponent?.let { out[it.flattenToString()] = it }
+        runCatching {
+            appContext.packageManager.queryIntentServices(
+                Intent(RecognitionService.SERVICE_INTERFACE), 0,
+            )
+        }.getOrDefault(emptyList()).forEach { resolved ->
+            val info = resolved.serviceInfo
+            if (info != null) {
+                val c = ComponentName(info.packageName, info.name)
+                out[c.flattenToString()] = c
+            }
+        }
+        candidates = out.values.toList()
+        candidateIdx = 0
+        Log.i(TAG, "recognizer candidates: " + candidates.joinToString { it.flattenToShortString() })
+    }
+
+    private fun currentCandidate(): ComponentName? =
+        candidates.getOrNull(candidateIdx) ?: defaultRecognizerComponent
+
+    /**
+     * [fix-vivo-plain-session] True when the configured recognizer is an OEM
+     * service rather than Google's, where EXTRA_AUDIO_SOURCE /
+     * EXTRA_SEGMENTED_SESSION are known to be rejected.
+     */
+    private fun shouldUsePlainSession(): Boolean {
+        val component = currentCandidate() ?: return false
+        val pkg = component.packageName ?: return false
+        return !pkg.startsWith("com.google.")
+    }
+
+    private fun newRecognizer(component: ComponentName? = currentCandidate()): SpeechRecognizer {
+        if (component != null) {
+            runCatching { SpeechRecognizer.createSpeechRecognizer(appContext, component) }
+                .onSuccess { return it }
+                .onFailure { Log.w(TAG, "explicit recognizer ${component.flattenToShortString()} failed: ${it.message}") }
+        }
+        return SpeechRecognizer.createSpeechRecognizer(appContext)
+    }
+
     private fun startInternal(locale: Locale, allowOnDeviceRetry: Boolean) {
         mainHandler.post {
             try {
@@ -567,14 +700,20 @@ class SystemSpeechRecognitionEngine(private val appContext: Context) : SpeechRec
                 // the locale (e.g. a zh-CN Pixel 4a) SODA fails every session
                 // with "Failed to get language pack" / ERROR_LANGUAGE_NOT_
                 // SUPPORTED(12), so the mic opened and closed instantly.
+                // [fix-vivo-plain-session] An OEM service has no on-device pack
+                // for us to use, and asking for one is what turned the panel's
+                // "System Recognition (Offline)" choice into an instant
+                // ERROR_CLIENT on vivo. In plain mode always use the regular
+                // recognizer, even when the user picked offline.
                 val wantOnDevice = preferOffline &&
+                    !plainSession &&
                     Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
                     allowOnDeviceRetry
                 val r = if (wantOnDevice) {
                     try { SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext) }
-                    catch (_: Throwable) { SpeechRecognizer.createSpeechRecognizer(appContext) }
+                    catch (_: Throwable) { newRecognizer() }
                 } else {
-                    SpeechRecognizer.createSpeechRecognizer(appContext)
+                    newRecognizer()
                 }
                 usingOnDevice = wantOnDevice
                 pendingLocale = locale
@@ -869,7 +1008,9 @@ class SystemSpeechRecognitionEngine(private val appContext: Context) : SpeechRec
             // in a local rather than showing it.
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, appContext.packageName)
-            if (preferOffline) putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+            // [fix-vivo-plain-session] No offline hint in plain mode: the OEM
+            // service has no offline model and answers ERROR_CLIENT.
+            if (preferOffline && !plainSession) putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
             // [T-android-vad] Endpointing now belongs to our Silero VAD, so ask
             // the platform to sit still and let it decide. These extras are
             // advisory (Google's recognizer has largely ignored them since
@@ -877,9 +1018,13 @@ class SystemSpeechRecognitionEngine(private val appContext: Context) : SpeechRec
             // them: the same app segmented differently per OEM. Padding them
             // well past the VAD's ~5 s window keeps the platform from cutting
             // a segment before the VAD does on ROMs that DO honour them.
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, PLATFORM_SILENCE_GUARD_MS)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, PLATFORM_SILENCE_GUARD_MS)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 1500)
+            // Plain mode keeps the intent minimal — one unrecognised extra is
+            // enough for some vendor services to reject the whole request.
+            if (!plainSession) {
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, PLATFORM_SILENCE_GUARD_MS)
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, PLATFORM_SILENCE_GUARD_MS)
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 1500)
+            }
 
             // [T-android-vad] Feed OUR capture instead of letting the
             // recogniser open the mic. This is what makes a VAD possible at
@@ -1136,6 +1281,48 @@ class SystemSpeechRecognitionEngine(private val appContext: Context) : SpeechRec
             }
             // First-class ROM-level failures poison the engine for the rest of
             // the process so we don't keep showing a button that doesn't work.
+            //
+            // [fix-vivo-plain-session] …but ERROR_CLIENT also means "this
+            // service does not accept EXTRA_AUDIO_SOURCE", which a plain
+            // session works around. Retry once before poisoning the engine.
+            if (errorCode == SpeechRecognizer.ERROR_CLIENT &&
+                !plainRetryDone &&
+                !plainSession &&
+                replayPcm == null &&
+                audioPipeRead != null
+            ) {
+                plainRetryDone = true
+                plainSession = true
+                val retryForPlain = pendingLocale ?: Locale.getDefault()
+                Log.i(
+                    TAG,
+                    "ERROR_CLIENT on injected-audio session — retrying once with a plain session " +
+                        "(recognizer owns the mic)",
+                )
+                tearDown()
+                startInternal(retryForPlain, allowOnDeviceRetry = false)
+                return
+            }
+            // [fix-stt-candidates] This engine refuses us — try the next one
+            // (e.g. vivo Copilot answers ERROR_CLIENT, a user-installed
+            // offline engine would work).
+            if ((errorCode == SpeechRecognizer.ERROR_CLIENT ||
+                    errorCode == SpeechRecognizer.ERROR_SERVER_DISCONNECTED) &&
+                candidateIdx + 1 < candidates.size
+            ) {
+                candidateIdx++
+                plainRetryDone = false
+                plainSession = shouldUsePlainSession()
+                val nextLocale = pendingLocale ?: Locale.getDefault()
+                Log.i(
+                    TAG,
+                    "recognizer refused (error $errorCode) — falling back to " +
+                        candidates[candidateIdx].flattenToShortString(),
+                )
+                tearDown()
+                startInternal(nextLocale, allowOnDeviceRetry = false)
+                return
+            }
             if (err == RecognitionError.OEM_NO_SERVICE ||
                 err == RecognitionError.PERMISSION_DENIED ||
                 err == RecognitionError.AUDIO_ERROR
