@@ -6220,9 +6220,9 @@ class ChatViewModel(
         // before first send, that choice wins.
         val session = chatRepository.createSession(
             modelId = modelId,
-            // [T-title-date-prefix] Optional "2026-10-27" stamp so a chat is
-            // identifiable in the list before the model names it.
-            title = com.openminis.app.data.prefs.SessionTitleDatePrefix.initialTitle(context),
+            // [T-title-date-prefix-scheduled-only] No stamp here: only chats a
+            // scheduled task opens get one (see ScheduledAgentRunner).
+            title = null,
             memoryEnabled = _memoryEnabled.value,
         )
         realSessionId = session.id

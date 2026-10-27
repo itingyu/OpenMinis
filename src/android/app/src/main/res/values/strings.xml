@@ -2747,5 +2747,6 @@
     <string name="custom_tools_error">Cannot save tool</string>
     <string name="scheduled_task_field_folder">Group</string>
     <string name="scheduled_task_folder_none">No group</string>
-    <string name="settings_title_date_prefix">Date prefix in new chat titles</string>
+    <string name="scheduled_task_title_date">Date prefix in chat title</string>
+    <string name="scheduled_task_title_date_hint">Opened chats get a "0901" stamp; this task only</string>
 </resources>

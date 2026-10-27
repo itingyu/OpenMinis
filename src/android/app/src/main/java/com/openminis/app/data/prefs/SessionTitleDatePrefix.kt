@@ -1,56 +1,33 @@
 package com.openminis.app.data.prefs
 
-import android.content.Context
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 /**
- * [T-title-date-prefix] Optional date stamp on new chat titles.
+ * [T-title-date-prefix] Optional "MMdd" stamp on a chat opened by a scheduled
+ * task ("0901 早报"), so the session list shows which day that run belongs to.
  *
- * Two effects, deliberately kept in one place so the editor, the chat screen
- * and the async title generator cannot disagree:
- *  - a brand-new chat opens with the stamp as its title (instead of leaving a
- *    blank that the list renders as "New chat");
- *  - once the model writes a real title, the stamp is re-applied so the date
- *    is not silently lost a few seconds after creation.
+ * The switch lives on the task itself ([com.openminis.app.scheduled.ScheduledTask.titleDatePrefix]);
+ * chats the user starts never get a stamp.
  */
 object SessionTitleDatePrefix {
+    private const val PATTERN = "MMdd"
 
-    private const val PREFS = "session_title_prefs"
-    private const val KEY_MODE = "date_prefix_mode"
+    /** "0901" for the given day. */
+    fun stamp(now: Long = System.currentTimeMillis()): String =
+        SimpleDateFormat(PATTERN, Locale.US).format(Date(now))
 
-    /** Nothing / "2026-10-27" / "2026-10-27 14:30". */
-    enum class Mode(val label: String, val pattern: String?) {
-        OFF("关闭", null),
-        DATE("日期", "yyyy-MM-dd"),
-        DATE_TIME("日期 + 时间", "yyyy-MM-dd HH:mm"),
-    }
-
-    private fun prefs(context: Context) =
-        context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-
-    fun mode(context: Context): Mode {
-        val raw = prefs(context).getString(KEY_MODE, Mode.OFF.name) ?: Mode.OFF.name
-        return Mode.entries.firstOrNull { it.name == raw } ?: Mode.OFF
-    }
-
-    fun setMode(context: Context, mode: Mode) {
-        prefs(context).edit().putString(KEY_MODE, mode.name).apply()
-    }
-
-    private fun stamp(mode: Mode): String? = mode.pattern?.let {
-        SimpleDateFormat(it, Locale.getDefault()).format(Date())
-    }
-
-    /** Title for a freshly created session, or null to keep the current behaviour. */
-    fun initialTitle(context: Context): String? = stamp(mode(context))
-
-    /** Prefixes [title] with today's stamp unless it is already there. */
-    fun decorate(context: Context, title: String): String {
-        val s = stamp(mode(context)) ?: return title
+    /** Prefixed title, or [title] unchanged when the task has the stamp off. */
+    fun decorate(title: String, enabled: Boolean, now: Long = System.currentTimeMillis()): String {
+        if (!enabled) return title
         val trimmed = title.trim()
-        if (trimmed.isEmpty() || trimmed.startsWith(s)) return trimmed.ifEmpty { s }
-        return "$s · $trimmed"
+        if (trimmed.isEmpty()) return stamp(now)
+        // Already stamped (the model renamed the chat and the prefix was kept).
+        if (PREFIXED.containsMatchIn(trimmed)) return trimmed
+        return "${stamp(now)} $trimmed"
     }
+
+    /** A leading MMdd followed by whitespace. */
+    private val PREFIXED = Regex("""^\d{4}(\s|$)""")
 }

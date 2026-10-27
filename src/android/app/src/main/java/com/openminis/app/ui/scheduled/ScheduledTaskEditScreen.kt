@@ -37,6 +37,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TimeInput
 import androidx.compose.material3.TopAppBar
@@ -131,6 +132,8 @@ fun ScheduledTaskEditScreen(
     // [T-android-scheduled-task-thinking] null = inherit (the run resolves its
     // own level from the bound group's default, as before this existed).
     var thinkingLevel by remember { mutableStateOf<ThinkingLevel?>(null) }
+    // [T-title-date-prefix] Stamp the chat this task opens with "0901".
+    var titleDatePrefix by remember { mutableStateOf(false) }
     // [T-scheduled-tool-prefill] Not editable here (set via minis-scheduled),
     // but carried through a save: buildTask rebuilds the task from scratch,
     // so without this, changing the time in the editor would silently drop
@@ -200,6 +203,7 @@ fun ScheduledTaskEditScreen(
             folderDisplay = vm.folderName(fid)
         }
         thinkingLevel = existing.thinkingLevel
+        titleDatePrefix = existing.titleDatePrefix
         prefillToolCall = existing.prefillToolCall
         fixedTriggerTask = existing.takeIf { !it.isCalendar }
         targetSessionId?.let { sid ->
@@ -220,6 +224,7 @@ fun ScheduledTaskEditScreen(
         modelBinding = modelBinding,
         folderId = folderId,
         thinkingLevel = thinkingLevel,
+        titleDatePrefix = titleDatePrefix,
         prefillToolCall = prefillToolCall,
         modelEntryIdLookup = { eid ->
             vm.listModels().firstOrNull { it.entryId == eid }?.modelId
@@ -306,6 +311,8 @@ fun ScheduledTaskEditScreen(
             onPickFolder = { id, name -> folderId = id; folderDisplay = name },
             thinkingLevel = thinkingLevel,
             onPickThinking = { thinkingLevel = it },
+            titleDatePrefix = titleDatePrefix,
+            onToggleTitleDatePrefix = { titleDatePrefix = it },
             startDateMs = startDateMs, onStartDateChange = { startDateMs = it },
             endDateMs = endDateMs, onEndDateChange = { endDateMs = it },
             fixedTriggerText = fixedTriggerText,
@@ -407,6 +414,7 @@ private fun EditFormBody(
     modelDisplay: String?, onPickModel: (binding: String?, display: String?) -> Unit,
     folderDisplay: String?, onPickFolder: (id: String?, name: String?) -> Unit = { _, _ -> },
     thinkingLevel: ThinkingLevel?, onPickThinking: (ThinkingLevel?) -> Unit,
+    titleDatePrefix: Boolean, onToggleTitleDatePrefix: (Boolean) -> Unit,
     startDateMs: Long?, onStartDateChange: (Long?) -> Unit,
     endDateMs: Long?, onEndDateChange: (Long?) -> Unit,
     /** Non-null: the trigger is fixed; show this instead of time/repeat/window. */
@@ -619,6 +627,29 @@ private fun EditFormBody(
                 onClick = { showFolderPicker = true },
                 onClear = if (folderDisplay != null) ({ onPickFolder(null, null) }) else null,
             )
+        }
+
+        // ── Title date prefix (NEW_SESSION only) ──
+        // [T-title-date-prefix] "0901 早报" instead of a bare label, so a daily
+        // task's chats stay distinguishable in the session list.
+        if (targetKind == TargetKind.NEW) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.scheduled_task_title_date),
+                        fontSize = 14.sp,
+                    )
+                    Text(
+                        text = stringResource(R.string.scheduled_task_title_date_hint),
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(checked = titleDatePrefix, onCheckedChange = onToggleTitleDatePrefix)
+            }
         }
 
         // ── Thinking (optional) ──
@@ -973,6 +1004,8 @@ private fun buildTask(
     /** [T-sched-folder] Group the NEW_SESSION chat is filed into. */
     folderId: String? = null,
     thinkingLevel: ThinkingLevel?,
+    /** [T-title-date-prefix] Per-task "don't stamp" default is false. */
+    titleDatePrefix: Boolean = false,
     prefillToolCall: com.openminis.app.scheduled.PrefilledToolCall?,
     modelEntryIdLookup: (String) -> String?,
     startDateMs: Long?,
@@ -1015,6 +1048,7 @@ private fun buildTask(
         modelId = derivedModelId,
         modelBinding = modelBinding,
         thinkingLevel = thinkingLevel,
+        titleDatePrefix = titleDatePrefix,
         // A rerun replays an existing message and sends nothing new, so a
         // prefilled call has nothing to precede.
         prefillToolCall = prefillToolCall.takeIf { targetMode !is ScheduledTargetMode.RerunMessage },

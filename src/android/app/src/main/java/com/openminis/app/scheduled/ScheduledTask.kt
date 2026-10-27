@@ -230,6 +230,11 @@ data class ScheduledTask(
      * second finds it taken.
      */
     val runNowSlotMs: Long? = null,
+    /**
+     * [T-title-date-prefix] Stamp the new chat's title with the creation date
+     * ("0901 早报"). Per task, and only meaningful for NEW_SESSION targets.
+     */
+    val titleDatePrefix: Boolean = false,
 ) {
 
     val isCalendar: Boolean get() = triggerKind == ScheduledTriggerKind.CALENDAR
@@ -357,6 +362,7 @@ data class ScheduledTask(
         if (modelBinding != null) put("modelBinding", modelBinding)
         if (folderId != null) put("folderId", folderId)
         if (thinkingLevel != null) put("thinkingLevel", thinkingLevel.name)
+        if (titleDatePrefix) put("titleDatePrefix", true)
         if (prefillToolCall != null) put("prefillToolCall", prefillToolCall.toJson())
         put("enabled", enabled)
         put("createdAt", createdAt)
@@ -401,6 +407,7 @@ data class ScheduledTask(
             folderId = if (o.has("folderId")) o.optString("folderId", null) else null,
             thinkingLevel = o.optString("thinkingLevel", "").takeIf { it.isNotEmpty() }
                 ?.let { ThinkingLevel.parseOrNull(it) },
+            titleDatePrefix = o.optBoolean("titleDatePrefix", false),
             prefillToolCall = PrefilledToolCall.fromJson(o.optJSONObject("prefillToolCall")),
             enabled = o.optBoolean("enabled", true),
             createdAt = o.optLong("createdAt", System.currentTimeMillis()),

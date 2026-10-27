@@ -133,10 +133,6 @@ fun SettingsScreen(
 ) {
     val context = LocalContext.current
     var showFeedbackSheet by remember { mutableStateOf(false) }
-    var showTitleDatePicker by remember { mutableStateOf(false) }
-    var titleDateMode by remember {
-        mutableStateOf(com.openminis.app.data.prefs.SessionTitleDatePrefix.mode(context))
-    }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -248,14 +244,6 @@ fun SettingsScreen(
                     title = stringResource(R.string.settings_custom_tools),
                     subtitle = stringResource(R.string.settings_custom_tools_subtitle),
                     onClick = onCustomToolsClick,
-                )
-                // [T-title-date-prefix] New-chat titles can carry a date.
-                SettingsItem(
-                    icon = Icons.Outlined.CalendarMonth,
-                    iconColor = Color(0xFFFF9500),
-                    title = stringResource(R.string.settings_title_date_prefix),
-                    subtitle = titleDateMode.label,
-                    onClick = { showTitleDatePicker = true },
                 )
                 SettingsItem(
                     icon = Icons.Outlined.Psychology,
@@ -426,40 +414,6 @@ fun SettingsScreen(
         }
     }
 
-    // [T-title-date-prefix] Where the stamp goes — or nowhere.
-    if (showTitleDatePicker) {
-        AlertDialog(
-            onDismissRequest = { showTitleDatePicker = false },
-            title = { Text(stringResource(R.string.settings_title_date_prefix)) },
-            text = {
-                Column {
-                    com.openminis.app.data.prefs.SessionTitleDatePrefix.Mode.entries.forEach { m ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    com.openminis.app.data.prefs.SessionTitleDatePrefix
-                                        .setMode(context, m)
-                                    titleDateMode = m
-                                    showTitleDatePicker = false
-                                }
-                                .padding(vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            RadioButton(selected = titleDateMode == m, onClick = null)
-                            Spacer(Modifier.width(8.dp))
-                            Text(m.label)
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showTitleDatePicker = false }) {
-                    Text(stringResource(android.R.string.cancel))
-                }
-            },
-        )
-    }
 
     if (showFeedbackSheet) {
         ModalBottomSheet(onDismissRequest = { showFeedbackSheet = false }) {

@@ -2546,5 +2546,6 @@
     <string name="custom_tools_error">无法保存工具</string>
     <string name="scheduled_task_field_folder">分组</string>
     <string name="scheduled_task_folder_none">不分组</string>
-    <string name="settings_title_date_prefix">新对话标题带日期前缀</string>
+    <string name="scheduled_task_title_date">定时任务会话标题带日期</string>
+    <string name="scheduled_task_title_date_hint">新建会话标题前加「0901」，仅对该任务生效</string>
 </resources>

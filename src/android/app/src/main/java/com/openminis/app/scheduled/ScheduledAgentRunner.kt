@@ -400,7 +400,12 @@ object ScheduledAgentRunner {
                         AppLogger.warning(TAG, "task ${task.id}: no provider — abort")
                         return null
                     }
-                val title = task.label.ifBlank { "Scheduled task" }
+                // [T-title-date-prefix-scheduled-only] Chats opened by a task
+                // carry the date stamp ("0901 早报"); user chats never do.
+                val title = com.openminis.app.data.prefs.SessionTitleDatePrefix.decorate(
+                    title = task.label.ifBlank { "Scheduled task" },
+                    enabled = task.titleDatePrefix,
+                )
                 val memoryOn = com.openminis.app.data.MemoryGlobalPrefs.isGlobalEnabled(app)
                 val session = app.chatRepository.createSession(
                     modelId = seedModelId,

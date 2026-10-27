@@ -139,13 +139,22 @@ class SessionTitleRegenerator(
                         )
                         return@walk null
                     }
-                    // [T-title-date-prefix] Keep the user's date stamp after
-                    // the model names the chat.
-                    chatRepository.updateSessionTitleAndCategory(
-                        id,
-                        com.openminis.app.data.prefs.SessionTitleDatePrefix.decorate(context, title),
-                        category,
-                    )
+                    // [T-title-date-prefix] Keep the stamp only if this chat
+                    // already has one — i.e. its task asked for it. A normal
+                    // chat never does, so nothing changes there.
+                    val previous = runCatching { chatRepository.getSession(id)?.title }
+                        .getOrNull()
+                        .orEmpty()
+                    val stamped = Regex("""^\d{4}(\s|$)""").containsMatchIn(previous)
+                    val finalTitle = if (stamped) {
+                        com.openminis.app.data.prefs.SessionTitleDatePrefix.decorate(
+                            title = title,
+                            enabled = true,
+                        )
+                    } else {
+                        title
+                    }
+                    chatRepository.updateSessionTitleAndCategory(id, finalTitle, category)
                     AppLogger.info(
                         "TitleGen",
                         "outcome=set origin=$origin session=${id.take(8)} " +
