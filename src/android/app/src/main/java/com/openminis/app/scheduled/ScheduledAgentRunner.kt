@@ -408,6 +408,14 @@ object ScheduledAgentRunner {
                     memoryEnabled = memoryOn,
                 )
                 app.chatRepository.dao.updateSource(session.id, "scheduled")
+                // [T-sched-folder] File the new chat into the group the task
+                // targets, so a scheduled run lands where the user expects
+                // instead of piling up ungrouped.
+                task.folderId?.takeIf { it.isNotBlank() }?.let { fid ->
+                    runCatching {
+                        app.chatRepository.setFolderForSessions(fid, listOf(session.id))
+                    }.onFailure { AppLogger.warning(TAG, "task ${task.id}: folder write failed: $it") }
+                }
 
                 // Write a model_binding when the task carried one OR when we
                 // fell back to defaultPrimaryGroupId. Pinned modelId (no

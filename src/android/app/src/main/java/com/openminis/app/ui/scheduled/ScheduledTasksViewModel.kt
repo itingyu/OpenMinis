@@ -93,6 +93,17 @@ class ScheduledTasksViewModel(private val appContext: Context) : ViewModel() {
             .map { MessageOption(it.id, extractPreview(it.partsJson), it.createdAt) }
     }
 
+    /** [T-sched-folder] Groups the scheduled chat can be filed into.
+     *  Synchronous on purpose: the editor needs the list while composing a
+     *  dialog. Room's listFolders is cheap and already cached in memory. */
+    fun listFolders(): List<com.openminis.app.data.db.FolderEntity> =
+        runCatching { kotlinx.coroutines.runBlocking { app.chatRepository.listFolders() } }
+            .getOrDefault(emptyList())
+
+    fun folderName(id: String): String? =
+        runCatching { kotlinx.coroutines.runBlocking { app.chatRepository.getFolder(id) } }
+            .getOrNull()?.name
+
     /** Best-effort human-readable label for a `model_binding` JSON string —
      *  group name for {"type":"group"}, model display name for
      *  {"type":"entry"}, null on parse failure or unknown ids. Mirrors the

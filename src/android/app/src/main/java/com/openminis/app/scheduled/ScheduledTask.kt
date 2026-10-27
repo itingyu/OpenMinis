@@ -147,6 +147,10 @@ data class ScheduledTask(
     // When non-null, ScheduledAgentRunner writes it onto the new session row so the
     // chat picks up the same group/entry the user chose for the task.
     val modelBinding: String? = null,
+    // [T-sched-folder] Session folder ("group" in the UI) the freshly minted
+    // chat is filed into for NEW_SESSION runs. null = leave it ungrouped,
+    // which is what every task written before this field existed does.
+    val folderId: String? = null,
     // [T-android-scheduled-task-thinking] Reasoning effort for this task's run.
     // null = "inherit" — the session resolves its own level from the bound
     // group's default (or OFF), exactly as before this field existed, so every
@@ -351,6 +355,7 @@ data class ScheduledTask(
         put("targetMode", targetMode.encode())
         if (modelId != null) put("modelId", modelId)
         if (modelBinding != null) put("modelBinding", modelBinding)
+        if (folderId != null) put("folderId", folderId)
         if (thinkingLevel != null) put("thinkingLevel", thinkingLevel.name)
         if (prefillToolCall != null) put("prefillToolCall", prefillToolCall.toJson())
         put("enabled", enabled)
@@ -393,6 +398,7 @@ data class ScheduledTask(
             targetMode = ScheduledTargetMode.decode(o.optString("targetMode", null)),
             modelId = if (o.has("modelId")) o.optString("modelId", null) else null,
             modelBinding = if (o.has("modelBinding")) o.optString("modelBinding", null) else null,
+            folderId = if (o.has("folderId")) o.optString("folderId", null) else null,
             thinkingLevel = o.optString("thinkingLevel", "").takeIf { it.isNotEmpty() }
                 ?.let { ThinkingLevel.parseOrNull(it) },
             prefillToolCall = PrefilledToolCall.fromJson(o.optJSONObject("prefillToolCall")),

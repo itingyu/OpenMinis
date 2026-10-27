@@ -125,6 +125,9 @@ fun ScheduledTaskEditScreen(
     //   - {"type":"group","groupId":"…"} → bound to that group (load-balance / fallback)
     var modelBinding by remember { mutableStateOf<String?>(null) }
     var modelDisplay by remember { mutableStateOf<String?>(null) }
+    var folderId by remember { mutableStateOf<String?>(null) }
+    var folderDisplay by remember { mutableStateOf<String?>(null) }
+    var showFolderPicker by remember { mutableStateOf(false) }
     // [T-android-scheduled-task-thinking] null = inherit (the run resolves its
     // own level from the bound group's default, as before this existed).
     var thinkingLevel by remember { mutableStateOf<ThinkingLevel?>(null) }
@@ -191,6 +194,11 @@ fun ScheduledTaskEditScreen(
                 }
             }
         }
+        // [T-sched-folder] Restore the target group and its display name.
+        existing.folderId?.let { fid ->
+            folderId = fid
+            folderDisplay = vm.folderName(fid)
+        }
         thinkingLevel = existing.thinkingLevel
         prefillToolCall = existing.prefillToolCall
         fixedTriggerTask = existing.takeIf { !it.isCalendar }
@@ -210,6 +218,7 @@ fun ScheduledTaskEditScreen(
         targetKind = targetKind, targetSessionId = targetSessionId,
         targetMessageId = targetMessageId,
         modelBinding = modelBinding,
+        folderId = folderId,
         thinkingLevel = thinkingLevel,
         prefillToolCall = prefillToolCall,
         modelEntryIdLookup = { eid ->
@@ -293,6 +302,8 @@ fun ScheduledTaskEditScreen(
             modelBindingForPreselect = modelBinding,
             modelDisplay = modelDisplay,
             onPickModel = { binding, display -> modelBinding = binding; modelDisplay = display },
+            folderDisplay = folderDisplay,
+            onPickFolder = { id, name -> folderId = id; folderDisplay = name },
             thinkingLevel = thinkingLevel,
             onPickThinking = { thinkingLevel = it },
             startDateMs = startDateMs, onStartDateChange = { startDateMs = it },
@@ -394,6 +405,7 @@ private fun EditFormBody(
     targetSessionId: String?,
     modelBindingForPreselect: String?,
     modelDisplay: String?, onPickModel: (binding: String?, display: String?) -> Unit,
+    folderDisplay: String?, onPickFolder: (id: String?, name: String?) -> Unit = { _, _ -> },
     thinkingLevel: ThinkingLevel?, onPickThinking: (ThinkingLevel?) -> Unit,
     startDateMs: Long?, onStartDateChange: (Long?) -> Unit,
     endDateMs: Long?, onEndDateChange: (Long?) -> Unit,
@@ -415,6 +427,7 @@ private fun EditFormBody(
     var showSessionPicker by remember { mutableStateOf(false) }
     var showMessagePicker by remember { mutableStateOf(false) }
     var showModelPicker by remember { mutableStateOf(false) }
+    var showFolderPicker by remember { mutableStateOf(false) }
     var showThinkingPicker by remember { mutableStateOf(false) }
     var showStartPicker by remember { mutableStateOf(false) }
     var showEndPicker by remember { mutableStateOf(false) }
@@ -597,6 +610,17 @@ private fun EditFormBody(
             onClear = if (modelDisplay != null) ({ onPickModel(null, null) }) else null,
         )
 
+        // ── Group / folder (optional, NEW_SESSION only) ──
+        // [T-sched-folder] Where the scheduled chat lands in the session list.
+        if (targetKind == TargetKind.NEW) {
+            PickerRow(
+                title = stringResource(R.string.scheduled_task_field_folder),
+                value = folderDisplay ?: stringResource(R.string.scheduled_task_folder_none),
+                onClick = { showFolderPicker = true },
+                onClear = if (folderDisplay != null) ({ onPickFolder(null, null) }) else null,
+            )
+        }
+
         // ── Thinking (optional) ──
         // [T-android-scheduled-task-thinking] Reported: "定时任务不能添加思考强度".
         // The runner already accepted a level (HeadlessChatRunner.prompt) — it
@@ -742,6 +766,34 @@ private fun EditFormBody(
                 onPickModel(json, name); showModelPicker = false
             },
             onDismiss = { showModelPicker = false },
+        )
+    }
+    if (showFolderPicker) {
+        val folders = remember { vm.listFolders() }
+        AlertDialog(
+            onDismissRequest = { showFolderPicker = false },
+            title = { Text(stringResource(R.string.scheduled_task_field_folder)) },
+            text = {
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                    folders.forEach { f ->
+                        Text(
+                            text = f.name,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    onPickFolder(f.id, f.name)
+                                    showFolderPicker = false
+                                }
+                                .padding(vertical = 12.dp),
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                MinisTextButton(onClick = { showFolderPicker = false }) {
+                    Text(stringResource(android.R.string.cancel))
+                }
+            },
         )
     }
     if (showStartPicker) {
@@ -918,6 +970,8 @@ private fun buildTask(
     targetSessionId: String?,
     targetMessageId: String?,
     modelBinding: String?,
+    /** [T-sched-folder] Group the NEW_SESSION chat is filed into. */
+    folderId: String? = null,
     thinkingLevel: ThinkingLevel?,
     prefillToolCall: com.openminis.app.scheduled.PrefilledToolCall?,
     modelEntryIdLookup: (String) -> String?,
