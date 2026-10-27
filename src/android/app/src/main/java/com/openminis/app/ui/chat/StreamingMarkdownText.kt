@@ -2606,89 +2606,94 @@ private fun RenderBlock(block: MdBlock) {
         }
 
         is MdBlock.CodeBlock -> {
-            // [T-in-chat-search] Phase 1: a code block holding the current
-            // match is outlined as a whole.
-            val codeSearchCurrent = com.openminis.app.ui.chat.search.chatSearchFieldIsCurrent(
-                LocalChatSearchPath.current?.let { com.openminis.app.ui.chat.search.ChatSearchUnits.markdown(it) },
-            )
-            val clipboardManager = LocalClipboardManager.current
-            var copied by remember { mutableStateOf(false) }
-            if (copied) {
-                LaunchedEffect(Unit) {
-                    kotlinx.coroutines.delay(1500)
-                    copied = false
+            // [T-mermaid] Fence tagged mermaid is a diagram, not copyable code.
+            if (block.language.trim().equals("mermaid", ignoreCase = true)) {
+                com.openminis.app.ui.markdown.MermaidBlockView(source = block.code.trim())
+            } else {
+                // [T-in-chat-search] Phase 1: a code block holding the current
+                // match is outlined as a whole.
+                val codeSearchCurrent = com.openminis.app.ui.chat.search.chatSearchFieldIsCurrent(
+                    LocalChatSearchPath.current?.let { com.openminis.app.ui.chat.search.ChatSearchUnits.markdown(it) },
+                )
+                val clipboardManager = LocalClipboardManager.current
+                var copied by remember { mutableStateOf(false) }
+                if (copied) {
+                    LaunchedEffect(Unit) {
+                        kotlinx.coroutines.delay(1500)
+                        copied = false
+                    }
                 }
-            }
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 8.dp)
-                    .then(
-                        if (codeSearchCurrent) {
-                            Modifier.border(2.dp, com.openminis.app.ui.chat.search.ChatSearchCurrentBackground, RoundedCornerShape(8.dp))
-                        } else Modifier,
-                    )
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(colors.codeBg),
-            ) {
-                // Header row: language label + copy button
-                Row(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(start = 12.dp, end = 8.dp, top = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                        .padding(bottom = 8.dp)
+                        .then(
+                            if (codeSearchCurrent) {
+                                Modifier.border(2.dp, com.openminis.app.ui.chat.search.ChatSearchCurrentBackground, RoundedCornerShape(8.dp))
+                            } else Modifier,
+                        )
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(colors.codeBg),
                 ) {
-                    Text(
-                        text = block.language.ifEmpty { "code" },
-                        fontSize = 11.sp,
-                        color = MdCodeLangColor,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Icon(
-                        imageVector = if (copied) Icons.Default.Check else Icons.Default.ContentCopy,
-                        contentDescription = if (copied) {
-                            stringResource(R.string.image_copied_toast)
-                        } else {
-                            stringResource(R.string.copy_code_block)
-                        },
-                        tint = if (copied) Color(0xFF34C759) else Color.White.copy(alpha = 0.4f),
+                    // Header row: language label + copy button
+                    Row(
                         modifier = Modifier
-                            .size(16.dp)
-                            .clickable {
-                                clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(block.code))
-                                copied = true
-                            },
-                    )
-                }
-                // iOS parity (SelectableMarkdownView.swift L971): cap visual
-                // code-block height at ~400 pt and let an internal scroll
-                // view handle overflow vertically, so a 200-line dump
-                // doesn't push the rest of the message off the bottom of
-                // the chat. Nest scrolls: inner Row owns horizontal scroll
-                // (long lines), outer Box owns vertical scroll + height
-                // cap (long blocks). Compose disallows two scroll modifiers
-                // on the same node, hence the nesting.
-                val vScroll = rememberScrollState()
-                val hScroll = rememberScrollState()
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 400.dp)
-                        .verticalScroll(vScroll)
-                        .padding(bottom = 8.dp),
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .horizontalScroll(hScroll)
-                            .padding(horizontal = 12.dp, vertical = 4.dp),
+                            .fillMaxWidth()
+                            .padding(start = 12.dp, end = 8.dp, top = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            text = block.code,
-                            fontSize = BaseFontSize * 0.85f,
-                            fontFamily = FontFamily.Monospace,
-                            color = colors.codeText,
-                            lineHeight = BaseLineHeight * 0.9f,
+                            text = block.language.ifEmpty { "code" },
+                            fontSize = 11.sp,
+                            color = MdCodeLangColor,
+                            modifier = Modifier.weight(1f),
                         )
+                        Icon(
+                            imageVector = if (copied) Icons.Default.Check else Icons.Default.ContentCopy,
+                            contentDescription = if (copied) {
+                                stringResource(R.string.image_copied_toast)
+                            } else {
+                                stringResource(R.string.copy_code_block)
+                            },
+                            tint = if (copied) Color(0xFF34C759) else Color.White.copy(alpha = 0.4f),
+                            modifier = Modifier
+                                .size(16.dp)
+                                .clickable {
+                                    clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(block.code))
+                                    copied = true
+                                },
+                        )
+                    }
+                    // iOS parity (SelectableMarkdownView.swift L971): cap visual
+                    // code-block height at ~400 pt and let an internal scroll
+                    // view handle overflow vertically, so a 200-line dump
+                    // doesn't push the rest of the message off the bottom of
+                    // the chat. Nest scrolls: inner Row owns horizontal scroll
+                    // (long lines), outer Box owns vertical scroll + height
+                    // cap (long blocks). Compose disallows two scroll modifiers
+                    // on the same node, hence the nesting.
+                    val vScroll = rememberScrollState()
+                    val hScroll = rememberScrollState()
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 400.dp)
+                            .verticalScroll(vScroll)
+                            .padding(bottom = 8.dp),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .horizontalScroll(hScroll)
+                                .padding(horizontal = 12.dp, vertical = 4.dp),
+                        ) {
+                            Text(
+                                text = block.code,
+                                fontSize = BaseFontSize * 0.85f,
+                                fontFamily = FontFamily.Monospace,
+                                color = colors.codeText,
+                                lineHeight = BaseLineHeight * 0.9f,
+                            )
+                        }
                     }
                 }
             }

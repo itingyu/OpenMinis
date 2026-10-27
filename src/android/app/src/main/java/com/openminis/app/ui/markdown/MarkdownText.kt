@@ -109,12 +109,18 @@ private fun BlockContent(
 ) {
     android.util.Log.d("MdRender", "BlockContent: ${block::class.simpleName}")
     when (block) {
-        is MarkdownParser.Block.Heading -> HeadingBlock(block, color)
+        is MarkdownParser.Block.Heading -> HeadingBlock(block, color, mathSpans)
         is MarkdownParser.Block.Paragraph -> ParagraphBlock(block.content, color, baseStyle, mathSpans)
-        is MarkdownParser.Block.CodeBlock -> CodeBlockView(block)
+        // [T-mermaid] A ```mermaid fence is a diagram, not code to copy.
+        is MarkdownParser.Block.CodeBlock ->
+            if (block.language.trim().equals("mermaid", ignoreCase = true)) {
+                MermaidBlockView(source = block.code.trim())
+            } else {
+                CodeBlockView(block)
+            }
         is MarkdownParser.Block.Blockquote -> BlockquoteView(block, color, baseStyle, mathSpans)
-        is MarkdownParser.Block.BulletList -> BulletListView(block, color, baseStyle)
-        is MarkdownParser.Block.NumberedList -> NumberedListView(block, color, baseStyle)
+        is MarkdownParser.Block.BulletList -> BulletListView(block, color, baseStyle, mathSpans)
+        is MarkdownParser.Block.NumberedList -> NumberedListView(block, color, baseStyle, mathSpans)
         is MarkdownParser.Block.Table -> TableView(block, color, baseStyle, mathSpans)
         is MarkdownParser.Block.MathBlock -> MathBlockView(latex = block.latex)
         is MarkdownParser.Block.ThematicBreak -> HorizontalDivider(
@@ -130,7 +136,11 @@ private fun BlockContent(
 // -- Heading --
 
 @Composable
-private fun HeadingBlock(heading: MarkdownParser.Block.Heading, color: Color) {
+private fun HeadingBlock(
+    heading: MarkdownParser.Block.Heading,
+    color: Color,
+    mathSpans: List<MarkdownParser.MathSpan> = emptyList(),
+) {
     val (fontSize, fontWeight) = when (heading.level) {
         1 -> 24.sp to FontWeight.Bold
         2 -> 20.sp to FontWeight.Bold
@@ -143,6 +153,7 @@ private fun HeadingBlock(heading: MarkdownParser.Block.Heading, color: Color) {
         text = heading.content,
         color = color,
         style = TextStyle(fontSize = fontSize, fontWeight = fontWeight),
+        mathSpans = mathSpans,
     )
 }
 
@@ -155,41 +166,38 @@ private fun ParagraphBlock(
     style: TextStyle,
     mathSpans: List<MarkdownParser.MathSpan> = emptyList(),
 ) {
-    // Fast path: no math placeholders → original single-Text rendering.
-    if (mathSpans.isEmpty() || !content.contains('￼')) {
-        InlineContent(text = content, color = color, style = style)
-        return
-    }
+    InlineContent(text = content, color = color, style = style, mathSpans = mathSpans)
+}
 
-    // T208 Layer B: split the paragraph at each placeholder and render
-    // inline math as a *non-display-mode*, *non-fillMaxWidth* tile so the
-    // formula visually flows after the preceding text segment instead of
-    // becoming a centered full-width block. Inline math should be roughly
-    // the size of surrounding text and aligned to the start of its row.
-    // Display math (`$$ … $$`) goes through Block.MathBlock above and
-    // still renders centered via MathBlockView — that path is correct.
-    // True inline-flow (math glyph on the same baseline as text within
-    // a single Text composable via InlineTextContent) is a follow-up;
-    // for now we stay with the row-split shape but keep the math visually
-    // small.
+@Composable
+private fun MathSplitContent(
+    text: String,
+    color: Color,
+    style: TextStyle,
+    mathSpans: List<MarkdownParser.MathSpan>,
+    modifier: Modifier = Modifier,
+) {
+    // T208 Layer B: split at each placeholder and render inline math as a
+    // non-display, non-fillMaxWidth tile so the formula flows after the text
+    // instead of becoming a centred full-width block. Display math (`$$…$$`)
+    // still goes through Block.MathBlock and renders centred.
     val byPlaceholder = remember(mathSpans) { mathSpans.associateBy { it.placeholder } }
     val regex = remember { Regex("\\uFFFC" + "MATH(\\d+)" + "\\uFFFC") }
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
         var cursor = 0
-        for (match in regex.findAll(content)) {
+        for (match in regex.findAll(text)) {
             val span = byPlaceholder[match.value] ?: continue
             if (match.range.first > cursor) {
-                val segment = content.substring(cursor, match.range.first)
+                val segment = text.substring(cursor, match.range.first)
                 if (segment.isNotBlank()) {
                     InlineContent(text = segment, color = color, style = style)
                 }
             }
-            // Inline math: non-display KaTeX, no fillMaxWidth, start-aligned.
             KaTeXRenderView(latex = span.latex, displayMode = false)
             cursor = match.range.last + 1
         }
-        if (cursor < content.length) {
-            val tail = content.substring(cursor)
+        if (cursor < text.length) {
+            val tail = text.substring(cursor)
             if (tail.isNotBlank()) {
                 InlineContent(text = tail, color = color, style = style)
             }
@@ -305,6 +313,7 @@ private fun BulletListView(
     block: MarkdownParser.Block.BulletList,
     color: Color,
     baseStyle: TextStyle,
+    mathSpans: List<MarkdownParser.MathSpan> = emptyList(),
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         for (item in block.items) {
@@ -332,6 +341,7 @@ private fun BulletListView(
                     text = item.content,
                     color = color,
                     style = baseStyle,
+                    mathSpans = mathSpans,
                     modifier = Modifier.weight(1f),
                 )
             }
@@ -346,6 +356,7 @@ private fun NumberedListView(
     block: MarkdownParser.Block.NumberedList,
     color: Color,
     baseStyle: TextStyle,
+    mathSpans: List<MarkdownParser.MathSpan> = emptyList(),
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         for ((index, item) in block.items.withIndex()) {
@@ -360,6 +371,7 @@ private fun NumberedListView(
                     text = item.content,
                     color = color,
                     style = baseStyle,
+                    mathSpans = mathSpans,
                     modifier = Modifier.weight(1f),
                 )
             }
@@ -499,7 +511,16 @@ private fun InlineContent(
     color: Color,
     style: TextStyle,
     modifier: Modifier = Modifier,
+    // [T-latex-inline] Math spans for this block. Lists, headings and table
+    // cells used to render WITHOUT them, so the placeholder was stripped and
+    // the formula silently disappeared — a bullet like "- 能量 $E=mc^2$" showed
+    // text with a hole in it. Handled here so every caller gets it for free.
+    mathSpans: List<MarkdownParser.MathSpan> = emptyList(),
 ) {
+    if (mathSpans.isNotEmpty() && text.contains('￼')) {
+        MathSplitContent(text = text, color = color, style = style, mathSpans = mathSpans, modifier = modifier)
+        return
+    }
     val inlineCodeBg = MaterialTheme.colorScheme.surfaceContainerHighest
     val inlineCodeColor = MaterialTheme.colorScheme.primary
     val linkColor = MaterialTheme.colorScheme.primary
