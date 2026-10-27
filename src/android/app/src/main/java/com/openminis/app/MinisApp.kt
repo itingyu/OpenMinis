@@ -1215,11 +1215,11 @@ class MinisApp : Application(), ImageLoaderFactory {
         }
         if (!dropFormulaCaches) return
 
-        Log.i("MinisApp", "onTrimMemory(level=$level): releasing formula bitmap caches")
-        runCatching { com.openminis.app.ui.chat.KatexWebViewPool.evictAll() }
-            .onFailure { Log.w("MinisApp", "KatexWebViewPool.evictAll failed: ${it.message}") }
-        runCatching { com.openminis.app.ui.markdown.KaTeXRendererCache.evictAll() }
-            .onFailure { Log.w("MinisApp", "KaTeXRendererCache.evictAll failed: ${it.message}") }
+        // [T-render-disk-cache] Formula/diagram bitmaps no longer live in a
+        // process-lifetime cache: they are read from disk per composition and
+        // released with the view, so there is nothing to drop here. The only
+        // resident piece is the offscreen KaTeX WebView, torn down at COMPLETE
+        // below.
 
         // [T-android-browser-global-tab-cap] Browser tabs are the largest
         // reclaimable allocation in the process — each is an out-of-process

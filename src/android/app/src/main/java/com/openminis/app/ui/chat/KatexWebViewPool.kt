@@ -7,12 +7,13 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.os.Handler
 import android.os.Looper
-import android.util.LruCache
 import android.webkit.JavascriptInterface
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.ui.unit.IntSize
+import com.openminis.app.ui.markdown.RenderDiskCache
+import com.openminis.app.ui.markdown.katexCacheKey
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -69,48 +70,19 @@ internal object KatexWebViewPool {
     private const val MAX_BITMAP_EDGE_PX = 2048
     private const val MAX_BITMAP_PIXELS = 4_000_000  // ~16 MB at ARGB_8888
 
-    /**
-     * [GH#206] Byte budget for the render cache.
-     *
-     * This cache used to be `LruCache(150)` — capacity counted in ENTRIES, with
-     * no `sizeOf` override, so 150 tiny inline formulas and 150 multi-megabyte
-     * display formulas were treated as identical load. Combined with the
-     * unbounded snapshot size above, a formula-dense session could pin hundreds
-     * of megabytes of native heap that nothing ever released (this object is a
-     * process-lifetime singleton, and Java GC does not reclaim native bitmap
-     * pixels).
-     *
-     * Sized against the app's own Java heap budget purely as a proportional
-     * signal of "how big a device is this"; the bitmaps themselves are native.
-     */
-    private val cacheBudgetBytes: Int = run {
-        val maxHeap = Runtime.getRuntime().maxMemory()
-        (maxHeap / 8).coerceIn(8L * 1024 * 1024, 32L * 1024 * 1024).toInt()
-    }
-
     private val mainHandler = Handler(Looper.getMainLooper())
     private val mutex = Mutex()
 
     /**
-     * NOTE ON RECYCLING: entries are NOT `recycle()`d on eviction, deliberately.
-     * `render()` hands the bitmap to Compose (`produceState` → `asImageBitmap()`),
-     * and a composable can keep drawing an on-screen formula long after its
-     * entry is evicted. Recycling on eviction would hand a live composition a
-     * recycled bitmap and crash with "trying to use a recycled bitmap".
-     * Dropping the reference is enough: once no composition holds it, the
-     * bitmap's native pixels are freed by GC/finalization. The fix that matters
-     * is bounding what enters the cache, which is what the budget above does.
+     * [T-render-disk-cache] No in-memory render cache: results go to
+     * [RenderDiskCache] and the caller owns the bitmap for as long as it draws
+     * it. Keeping a process-lifetime LRU here pinned every formula ever shown
+     * in native heap, and none of it survived a restart.
      */
-    private val cache = object : LruCache<String, KatexRenderResult>(cacheBudgetBytes) {
-        override fun sizeOf(key: String, value: KatexRenderResult): Int =
-            value.bitmap.allocationByteCount.coerceAtLeast(1)
-    }
-
-    /** [GH#206] Drop every cached formula. Safe at any time — see the note above. */
     fun evictAll() {
-        val before = cache.size()
-        cache.evictAll()
-        android.util.Log.i(TAG, "evictAll: released ~${before / 1024}KB of cached formula bitmaps")
+        // Kept for callers that just want the caches dropped; the on-disk
+        // copies are bounded by RenderDiskCache's own trim and survive a trim
+        // request on purpose (they cost no resident memory).
     }
 
     /**
@@ -147,12 +119,29 @@ internal object KatexWebViewPool {
         isDark: Boolean,
         fontSizePx: Int = DEFAULT_FONT_SIZE_PX,
     ): KatexRenderResult? {
+        val appContext = context.applicationContext
         val key = cacheKey(latex, displayMode, isDark, fontSizePx)
-        cache.get(key)?.let { return it }
+        // [T-render-disk-cache] Read-through disk; no in-process copy is kept.
+        RenderDiskCache.load(appContext, "katex", key)?.let {
+            return KatexRenderResult(it.bitmap, IntSize(it.cssWidth, it.cssHeight))
+        }
         return mutex.withLock {
-            cache.get(key)?.let { return@withLock it }
-            val result = renderInternal(context.applicationContext, latex, displayMode, isDark, fontSizePx)
-            if (result != null) cache.put(key, result)
+            RenderDiskCache.load(appContext, "katex", key)?.let {
+                return@withLock KatexRenderResult(it.bitmap, IntSize(it.cssWidth, it.cssHeight))
+            }
+            val result = renderInternal(appContext, latex, displayMode, isDark, fontSizePx)
+            if (result != null) {
+                RenderDiskCache.save(
+                    appContext,
+                    "katex",
+                    key,
+                    RenderDiskCache.Entry(
+                        bitmap = result.bitmap,
+                        cssWidth = result.size.width,
+                        cssHeight = result.size.height,
+                    ),
+                )
+            }
             result
         }
     }
@@ -351,11 +340,9 @@ internal object KatexWebViewPool {
         return out.await()
     }
 
-    private fun cacheKey(latex: String, displayMode: Boolean, isDark: Boolean, fontSizePx: Int): String {
-        val d = if (displayMode) 'D' else 'I'
-        val k = if (isDark) 'k' else 'l'
-        return "$d:$k:$fontSizePx:$latex"
-    }
+    /** Shared with [com.openminis.app.ui.markdown.KaTeXRenderView] so both paths hit one entry. */
+    private fun cacheKey(latex: String, displayMode: Boolean, isDark: Boolean, fontSizePx: Int): String =
+        katexCacheKey(latex, displayMode, isDark, fontSizePx)
 
     private fun String.escapeForJs(): String =
         this.replace("\\", "\\\\")

@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.openminis.app.logging.AppLogger
+import com.openminis.app.ui.chat.KatexWebViewPool
 import com.openminis.app.ui.theme.ChatColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -60,69 +61,20 @@ private const val MAX_BITMAP_PIXELS = 4_000_000
 private const val KATEX_WEBVIEW_RELEASED_TAG = "katex-webview-released"
 
 /**
- * Renders a LaTeX string using KaTeX in an offscreen WebView, capturing the result as a bitmap.
- * Uses an LRU cache to avoid re-rendering identical expressions.
+ * [T-render-disk-cache] Cache key for a formula. `isDark` is part of it because
+ * the stored value is a rendered bitmap whose glyphs are baked light-on-dark or
+ * the reverse; `displayMode` changes the layout, so it is part of the key too.
  */
-object KaTeXRendererCache {
-    /** [width]/[height] are the bitmap's physical-pixel dimensions
-     *  (CSS px * device density) so the image stays sharp on hi-DPI screens.
-     *  [cssWidth]/[cssHeight] are KaTeX's reported size in CSS pixels — used
-     *  as the dp size for `Image` so the formula displays at the same visual
-     *  scale as surrounding text instead of the raw bitmap-pixel size. (T206) */
-    data class CacheEntry(
-        val bitmap: Bitmap,
-        val width: Int,
-        val height: Int,
-        val cssWidth: Int,
-        val cssHeight: Int,
-    )
-
-    /**
-     * [GH#206] Byte budget, mirroring KatexWebViewPool.
-     *
-     * This was `LruCache(200)` — capacity in ENTRIES with no `sizeOf`, holding
-     * ARGB_8888 bitmaps whose pixels live in the NATIVE heap on Android 8+.
-     * 200 large formulas could therefore pin hundreds of MB that nothing ever
-     * released: this is a process-lifetime `object`, and Java GC does not
-     * reclaim native bitmap pixels while the cache still references them.
-     *
-     * NOTE: entries are NOT recycled on eviction. The bitmap is handed to
-     * Compose (`asImageBitmap()`) and an on-screen formula may outlive its
-     * cache entry; recycling it would crash the composition. Dropping the
-     * reference lets GC reclaim it once nothing draws it. See the matching
-     * note in KatexWebViewPool.
-     */
-    private val cacheBudgetBytes: Int = run {
-        val maxHeap = Runtime.getRuntime().maxMemory()
-        (maxHeap / 8).coerceIn(8L * 1024 * 1024, 32L * 1024 * 1024).toInt()
-    }
-
-    val cache = object : LruCache<String, CacheEntry>(cacheBudgetBytes) {
-        override fun sizeOf(key: String, value: CacheEntry): Int =
-            value.bitmap.allocationByteCount.coerceAtLeast(1)
-    }
-
-    /** [GH#206] Drop every cached formula. Safe at any time — see the note above. */
-    fun evictAll() {
-        val before = cache.size()
-        cache.evictAll()
-        android.util.Log.i(
-            "KaTeXRendererCache",
-            "evictAll: released ~${before / 1024}KB of cached formula bitmaps",
-        )
-    }
-
-    /**
-     * [T-android-inapp-theme-popups #187] `isDark` is part of the key because the
-     * cached value is a rendered BITMAP whose glyphs are baked light-on-dark or
-     * dark-on-light. Keying only on (latex, displayMode) meant flipping the app
-     * theme re-read the colour but still hit the previous theme's bitmap, so a
-     * formula kept its old ink until the entry was evicted. Mirrors the sibling
-     * cache in KatexWebViewPool.cacheKey, which has always included it.
-     */
-    fun cacheKey(latex: String, displayMode: Boolean, isDark: Boolean): String =
-        (if (displayMode) "D:" else "I:") + (if (isDark) "k:" else "l:") + latex
-}
+internal fun katexCacheKey(
+    latex: String,
+    displayMode: Boolean,
+    isDark: Boolean,
+    fontSizePx: Int = KATEX_FONT_SIZE_PX,
+): String =
+    (if (displayMode) "D:" else "I:") +
+        (if (isDark) "k:" else "l:") +
+        "$fontSizePx:" +
+        latex
 
 /**
  * Composable that renders a display-mode LaTeX math block.
@@ -143,10 +95,15 @@ fun MathBlockView(
 }
 
 /**
- * Core KaTeX rendering composable. Uses a hidden WebView to render LaTeX, then captures
- * the result as a Bitmap displayed via Image composable. Falls back to monospace text on error.
+ * [T-katex-pool] One shared, warm WebView renders every formula.
+ *
+ * This used to build a WebView per formula and load katex-render.html each time,
+ * so a document with a dozen formulas paid a full page load (KaTeX + fonts,
+ * 0.3–0.8 s) per formula, and scrolling the formula out of view and back lost
+ * the WebView and started over whenever the bitmap cache missed.
+ * [KatexWebViewPool] keeps a single ready page and serialises renders through a
+ * mutex, so a warm formula costs one `evaluateJavascript` call.
  */
-@SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun KaTeXRenderView(
     latex: String,
@@ -154,220 +111,83 @@ fun KaTeXRenderView(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    val density = LocalDensity.current
     val isDark = ChatColors.isDark
-    val fontSize = 16f
-    // [T-android-inapp-theme-popups #187] `isDark` must be a remember key too, not
-    // just a cacheKey ingredient: without it the memo survives a theme flip and
-    // hands back the previous theme's key, so the new key is never even computed.
+    // [T-android-inapp-theme-popups #187] `isDark` is part of the key because the
+    // cached value is a bitmap whose glyphs are baked light-on-dark or the reverse.
     val cacheKey = remember(latex, displayMode, isDark) {
-        KaTeXRendererCache.cacheKey(latex, displayMode, isDark)
+        katexCacheKey(latex, displayMode, isDark)
     }
 
-    // Check cache first
-    val cached = remember(cacheKey) { KaTeXRendererCache.cache.get(cacheKey) }
+    // [T-render-disk-cache] Read-through disk instead of a process-lifetime LRU:
+    // a reopened chat reuses the PNG, and the bitmap is released as soon as the
+    // formula scrolls out of composition.
+    var entry by remember(cacheKey) { mutableStateOf<RenderDiskCache.Entry?>(null) }
+    var checked by remember(cacheKey) { mutableStateOf(false) }
+    var failed by remember(cacheKey) { mutableStateOf(false) }
 
-    if (cached != null) {
-        // T206: bitmap is rendered at density × CSS px for sharpness, but
-        // we display at CSS-pixel dp so the formula visually matches the
-        // surrounding 16sp text (otherwise Image maps physical pixels 1:1
-        // and the formula renders ~density× too large).
-        Image(
-            bitmap = cached.bitmap.asImageBitmap(),
-            contentDescription = "Math: $latex",
-            modifier = modifier.size(cached.cssWidth.dp, cached.cssHeight.dp),
-        )
-        return
+    LaunchedEffect(cacheKey) {
+        val appContext = context.applicationContext
+        val cached = RenderDiskCache.load(appContext, "katex", cacheKey)
+        if (cached != null) {
+            entry = cached
+            checked = true
+            return@LaunchedEffect
+        }
+        val result = runCatching {
+            KatexWebViewPool.render(
+                context = appContext,
+                latex = latex,
+                displayMode = displayMode,
+                isDark = isDark,
+                fontSizePx = KATEX_FONT_SIZE_PX,
+            )
+        }.getOrNull()
+        if (result == null) {
+            AppLogger.warning(TAG, "KaTeX render failed · latex=${latex.take(80)}")
+            failed = true
+        } else {
+            // T206: the bitmap is density × CSS px, but the formula is laid out
+            // at its CSS size so it matches the surrounding 16sp text.
+            val rendered = RenderDiskCache.Entry(
+                bitmap = result.bitmap,
+                cssWidth = result.size.width,
+                cssHeight = result.size.height,
+            )
+            entry = rendered
+            RenderDiskCache.save(appContext, "katex", cacheKey, rendered)
+        }
+        checked = true
     }
 
-    // State for the rendered bitmap
-    var renderedBitmap by remember(cacheKey) { mutableStateOf<Bitmap?>(null) }
-    // T206: keep CSS size alongside the bitmap so the post-render Image
-    // can size itself the same way the cache-hit path does.
-    var renderedCssWidth by remember(cacheKey) { mutableStateOf(0) }
-    var renderedCssHeight by remember(cacheKey) { mutableStateOf(0) }
-    var renderError by remember(cacheKey) { mutableStateOf<String?>(null) }
-
-    if (renderedBitmap != null) {
-        Image(
-            bitmap = renderedBitmap!!.asImageBitmap(),
+    val shown = entry
+    when {
+        shown != null -> Image(
+            bitmap = shown.bitmap.asImageBitmap(),
             contentDescription = "Math: $latex",
-            modifier = modifier.size(renderedCssWidth.dp, renderedCssHeight.dp),
+            modifier = modifier.size(shown.cssWidth.dp, shown.cssHeight.dp),
         )
-    } else if (renderError != null) {
-        // Fallback: show raw LaTeX in monospace
-        Text(
+
+        failed || checked -> Text(
             text = latex,
             style = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 14.sp),
             color = MaterialTheme.colorScheme.onSurface,
             modifier = modifier,
         )
-    } else {
-        // Placeholder while rendering
-        Box(
-            modifier = modifier
-                .then(
-                    if (displayMode) Modifier
-                        .fillMaxWidth()
-                        .height(44.dp)
-                    else Modifier
-                        .widthIn(min = 20.dp)
-                        .height(20.dp)
-                ),
-        )
 
-        // Render with offscreen WebView
-        AndroidView(
-            factory = { ctx ->
-                WebView(ctx).apply {
-                    layoutParams = ViewGroup.LayoutParams(1, 1)
-                    settings.javaScriptEnabled = true
-                    settings.allowFileAccess = true
-                    // T208 Layer A: keep WebView text-zoom at 100% regardless
-                    // of the user's accessibility font-size setting. Without
-                    // this, the bitmap KaTeX renders is multiplied by the
-                    // system font scale, but our bridge reports the
-                    // pre-scale CSS dimensions — Image then displays the
-                    // (over-rendered) bitmap inside an undersized box and
-                    // ContentScale.Fit makes the formula appear physically
-                    // larger than the surrounding 16sp text.
-                    settings.textZoom = 100
-                    setBackgroundColor(android.graphics.Color.TRANSPARENT)
-
-                    addJavascriptInterface(object {
-                        @JavascriptInterface
-                        fun onRendered(width: Int, height: Int, error: String) {
-                            if (error.isNotEmpty()) {
-                                AppLogger.warning(TAG, "KaTeX render failed: $error · latex=${latex.take(80)}")
-                                renderError = error
-                                return
-                            }
-                            if (width <= 0 || height <= 0) {
-                                AppLogger.warning(TAG, "KaTeX render produced zero dimensions · latex=${latex.take(80)}")
-                                renderError = "zero dimensions"
-                                return
-                            }
-                            // Scale for device density
-                            val scale = ctx.resources.displayMetrics.density
-                            val bitmapW = (width * scale).toInt()
-                            val bitmapH = (height * scale).toInt()
-
-                            // Resize WebView to content size, then capture
-                            post {
-                                layoutParams = ViewGroup.LayoutParams(bitmapW, bitmapH)
-                                requestLayout()
-                                postDelayed({
-                                    if (tag == KATEX_WEBVIEW_RELEASED_TAG) return@postDelayed
-                                    // [GH#206] Clamp the captured bitmap. bitmapW/H
-                                    // were previously unbounded, so a wide display
-                                    // formula allocated multi-MB of NATIVE heap.
-                                    // The WebView keeps its full layout size (above)
-                                    // so the formula still lays out correctly; only
-                                    // the captured bitmap is scaled DOWN, never
-                                    // clipped, trading sharpness for memory.
-                                    val edgeScale = minOf(
-                                        1f,
-                                        MAX_BITMAP_EDGE_PX.toFloat() / bitmapW,
-                                        MAX_BITMAP_EDGE_PX.toFloat() / bitmapH,
-                                    )
-                                    val pixelScale =
-                                        if (bitmapW.toLong() * bitmapH > MAX_BITMAP_PIXELS) {
-                                            kotlin.math.sqrt(
-                                                MAX_BITMAP_PIXELS.toDouble() /
-                                                    (bitmapW.toDouble() * bitmapH),
-                                            ).toFloat()
-                                        } else {
-                                            1f
-                                        }
-                                    val capScale = minOf(edgeScale, pixelScale)
-                                    val capW = (bitmapW * capScale).toInt().coerceAtLeast(1)
-                                    val capH = (bitmapH * capScale).toInt().coerceAtLeast(1)
-                                    if (capScale < 1f) {
-                                        AppLogger.info(
-                                            TAG,
-                                            "bitmap clamped ${bitmapW}x$bitmapH -> ${capW}x$capH " +
-                                                "(scale=$capScale)",
-                                        )
-                                    }
-                                    val bitmap = Bitmap.createBitmap(capW, capH, Bitmap.Config.ARGB_8888)
-                                    val canvas = android.graphics.Canvas(bitmap)
-                                    if (capScale < 1f) canvas.scale(capScale, capScale)
-                                    draw(canvas)
-                                    KaTeXRendererCache.cache.put(
-                                        cacheKey,
-                                        KaTeXRendererCache.CacheEntry(
-                                            // Record the ACTUAL bitmap size, not the
-                                            // pre-clamp request — `width`/`height`
-                                            // document the bitmap's physical pixels.
-                                            // Display sizing uses cssWidth/cssHeight,
-                                            // which are unchanged, so a clamped
-                                            // formula still lays out identically.
-                                            bitmap = bitmap,
-                                            width = capW,
-                                            height = capH,
-                                            cssWidth = width,
-                                            cssHeight = height,
-                                        )
-                                    )
-                                    renderedCssWidth = width
-                                    renderedCssHeight = height
-                                    renderedBitmap = bitmap
-                                }, 100)
-                            }
-                        }
-                    }, "AndroidBridge")
-
-                    webViewClient = object : WebViewClient() {
-                        // [T-net-android-phase3] Settings > Network: answer the local entry's
-                        // proxy challenge (WebViewNetworkProxy); any other auth request as before.
-                        override fun onReceivedHttpAuthRequest(view: android.webkit.WebView?, handler: android.webkit.HttpAuthHandler?, host: String?, realm: String?) {
-                            if (handler != null && com.openminis.app.network.WebViewNetworkProxy.answerAuth(handler, host, realm, view?.url)) return
-                            super.onReceivedHttpAuthRequest(view, handler, host, realm)
-                        }
-
-                        // [T-android-webview-render-process-gone] (GH#341) The
-                        // AndroidView factory rebuilds this on the next
-                        // recomposition, and `onRelease` still stamps
-                        // KATEX_WEBVIEW_RELEASED_TAG on the old instance, so a
-                        // queued capture runnable will not touch it.
-                        override fun onRenderProcessGone(
-                            view: WebView?,
-                            detail: android.webkit.RenderProcessGoneDetail?,
-                        ): Boolean {
-                            runCatching { view?.tag = KATEX_WEBVIEW_RELEASED_TAG }
-                            return com.openminis.app.ui.webview.WebViewRenderProcess
-                                .handle("KaTeXView", detail)
-                        }
-
-                        override fun onPageFinished(view: WebView?, url: String?) {
-                            super.onPageFinished(view, url)
-                            val escapedLatex = latex
-                                .replace("\\", "\\\\")
-                                .replace("'", "\\'")
-                                .replace("\n", "\\n")
-                                .replace("\r", "")
-                            evaluateJavascript(
-                                "renderMath('$escapedLatex', $displayMode, $fontSize, $isDark)",
-                                null
-                            )
-                        }
-                    }
-
-                    loadUrl("file:///android_asset/katex/katex-render.html")
-                }
-            },
-            // [T-android-katex-webview-release] This composable creates ONE
-            // WebView PER FORMULA and used to pass only `factory`, so leaving
-            // composition dropped the Java reference but never called
-            // `destroy()`. A WebView's renderer state is native memory that is
-            // reclaimed only on destroy() (or, eventually, finalization), so a
-            // formula-dense document leaked a full KaTeX page per formula.
-            onRelease = { wv ->
-                wv.tag = KATEX_WEBVIEW_RELEASED_TAG
-                runCatching { wv.stopLoading() }
-                runCatching { wv.destroy() }
-            },
-            modifier = Modifier.height(0.dp), // Hidden
+        // Placeholder while the shared renderer works through the queue. A
+        // display-mode box reserves a line of height so surrounding text does
+        // not jump when the formula lands.
+        else -> Box(
+            modifier = modifier.then(
+                if (displayMode) {
+                    Modifier.fillMaxWidth().height(44.dp)
+                } else {
+                    Modifier.widthIn(min = 20.dp).height(20.dp)
+                },
+            ),
         )
     }
 }
+
+/** KaTeX body size for every formula — matches the surrounding 16sp text. */
+internal const val KATEX_FONT_SIZE_PX = 16
