@@ -8,6 +8,7 @@ import android.os.Environment
 import android.os.storage.StorageManager
 import android.provider.DocumentsContract
 import android.util.Log
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.withLock
 import com.openminis.app.data.FileMentionIndex
 import com.openminis.app.data.MountedFoldersStore
@@ -247,6 +248,17 @@ object PRootKernel {
         applyMountedFoldersSnapshot(context)
 
         isBooted = true
+
+        // [T-ubuntu-rootfs] Ubuntu's base image has no bash/git/curl/python —
+        // one apt run fills that in. Kick it off here, now that proot and the
+        // bind mounts are live; it must not block the caller (the first chat
+        // turn would stall for minutes), and it is idempotent via a marker.
+        if (rootfsManager.flavor == RootfsFlavor.UBUNTU) {
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                UbuntuRootfsBootstrap.ensureBaseInstalled(context)
+            }
+        }
+
         Log.i(TAG, "PRoot kernel booted " +
             "rootfs=${rootfsManager.rootfsDir.absolutePath} " +
             "nativeLibDir=$nativeLibDir " +

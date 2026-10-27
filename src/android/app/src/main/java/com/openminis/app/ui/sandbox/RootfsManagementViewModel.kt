@@ -87,6 +87,44 @@ class RootfsManagementViewModel : ViewModel() {
         }
     }
 
+    /**
+     * [T-ubuntu-rootfs] Switch distro. Both trees can coexist on disk, so this
+     * only flips the preference and extracts the new one if it is missing; the
+     * sandbox must be rebooted afterwards (the caller restarts the shell).
+     */
+    fun switchFlavor(context: Context, flavor: com.openminis.app.sandbox.RootfsFlavor) {
+        val manager = RootfsManager.getInstance(context)
+        if (manager.flavor == flavor) return
+        com.openminis.app.sandbox.RootfsFlavorPrefs.set(context, flavor)
+        _uiState.value = _uiState.value.copy(
+            isProcessing = true,
+            statusMessage = "Switching to ${flavor.label}…",
+            resultMessage = null,
+            installProgress = 0f,
+        )
+        val fresh = RootfsManager.getInstance(context)
+        observeInstallProgress(fresh)
+        viewModelScope.launch {
+            try {
+                fresh.installIfNeeded()
+                _uiState.value = _uiState.value.copy(
+                    isProcessing = false,
+                    lastOperationSuccess = true,
+                    resultMessage = "${flavor.label} ready — restart Minis to apply",
+                    installProgress = null,
+                )
+                refresh(context)
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    isProcessing = false,
+                    lastOperationSuccess = false,
+                    resultMessage = "Switch failed: ${e.message}",
+                    installProgress = null,
+                )
+            }
+        }
+    }
+
     fun install(context: Context) {
         _uiState.value = _uiState.value.copy(
             isProcessing = true,

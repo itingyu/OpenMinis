@@ -39,14 +39,35 @@ sealed class RootfsInstallState {
  */
 class RootfsManager private constructor(private val context: Context) {
 
-    val rootfsDir: File = File(context.filesDir, "alpine-rootfs")
+    /** [T-ubuntu-rootfs] The distro this install represents. */
+    val flavor: RootfsFlavor get() = RootfsFlavorPrefs.current(context)
+
+    /**
+     * [T-ubuntu-rootfs] Follows [flavor], so switching distros points every
+     * caller (shell, file browser, mounts) at the new tree without changes.
+     */
+    val rootfsDir: File get() = File(context.filesDir, flavor.dirName)
+
     val prootBinary: File = File(context.applicationInfo.nativeLibraryDir, "libproot.so")
 
     private val archFile: File get() = File(rootfsDir, ".arch")
 
+    /**
+     * [T-ubuntu-rootfs] `.flavor` records which distro the tree holds. Trees
+     * from before this marker existed are Alpine, so a missing file with a
+     * matching `.arch` still counts as installed.
+     */
+    private val flavorFile: File get() = File(rootfsDir, ".flavor")
+
     val isInstalled: Boolean
-        get() = rootfsDir.exists() && archFile.exists() &&
-                archFile.readText().trim() == ARCH
+        get() {
+            if (!rootfsDir.exists()) return false
+            val archOk = archFile.exists() && archFile.readText().trim() == ARCH
+            if (!archOk) return false
+            val recorded = flavorFile.takeIf { it.exists() }?.readText()?.trim()
+                ?: RootfsFlavor.ALPINE.id
+            return recorded == flavor.id
+        }
 
     /**
      * Observable install progress. UI layers (OnboardingScreen,
@@ -84,12 +105,7 @@ class RootfsManager private constructor(private val context: Context) {
 
             // Extract rootfs from assets.
             // AAPT may decompress .tar.gz → .tar automatically, so try both names.
-            val assetName = try {
-                context.assets.open(ROOTFS_ASSET).close()
-                ROOTFS_ASSET
-            } catch (_: java.io.FileNotFoundException) {
-                ROOTFS_ASSET_TAR
-            }
+            val assetName = assetNameFor(context.assets, flavor)
 
             // Asset size for progress calculation — compressed length (for .gz)
             // or uncompressed length (for .tar). openFd() fails for 0-length
@@ -119,8 +135,9 @@ class RootfsManager private constructor(private val context: Context) {
 
             _installState.value = RootfsInstallState.Finalizing
 
-            // Write arch marker
+            // Write arch + flavour markers
             archFile.writeText(ARCH)
+            flavorFile.writeText(flavor.id)
 
             // Pre-create /var/minis directories. Mirrors iOS
             // RootfsManager.swift:76-80 (attachments/offloads/workspace/skills/
@@ -749,8 +766,22 @@ class RootfsManager private constructor(private val context: Context) {
             return sb.toString().trim()
         }
         private const val ARCH = "aarch64"
-        private const val ROOTFS_ASSET = "alpine-minirootfs.tar.gz"
-        private const val ROOTFS_ASSET_TAR = "alpine-minirootfs.tar"
+
+        /**
+         * [T-ubuntu-rootfs] Asset name for [flavor]. AAPT may decompress the
+         * `.tar.gz` at build time, which renames it to `.tar`, so the presence
+         * of the gz name is probed rather than assumed.
+         */
+        fun assetNameFor(assets: android.content.res.AssetManager, flavor: RootfsFlavor): String {
+            val gz = flavor.asset
+            val plain = gz.removeSuffix(".gz")
+            return try {
+                assets.open(gz).close()
+                gz
+            } catch (_: java.io.FileNotFoundException) {
+                plain
+            }
+        }
         private const val PROOT_ASSET = "proot-aarch64"
         private const val DEFAULT_MOUNT_ASSET = "default_mount"
 
