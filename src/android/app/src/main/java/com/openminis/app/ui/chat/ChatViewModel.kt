@@ -2520,6 +2520,10 @@ class ChatViewModel(
             // would reject.
             rosterNames = providerRepository.subAgents.map { it.name },
             userAskExposed = userAskExposedThisRun,
+            // [T-custom-tools] Re-read per schema build (same rationale as the
+            // memory gate above): adding a tool in Settings takes effect on the
+            // next request without rebuilding the view model.
+            customTools = com.openminis.app.tools.CustomToolStore.enabledTools(context),
         )
 
     /**
@@ -6216,6 +6220,9 @@ class ChatViewModel(
         // before first send, that choice wins.
         val session = chatRepository.createSession(
             modelId = modelId,
+            // [T-title-date-prefix] Optional "2026-10-27" stamp so a chat is
+            // identifiable in the list before the model names it.
+            title = com.openminis.app.data.prefs.SessionTitleDatePrefix.initialTitle(context),
             memoryEnabled = _memoryEnabled.value,
         )
         realSessionId = session.id
@@ -14265,7 +14272,17 @@ class ChatViewModel(
                         )
                     },
                 )
-            else -> ToolExecutionResult("Unknown tool: $name", false)
+            else -> {
+                // [T-custom-tools] A name the schema declared from Settings.
+                // Looked up at dispatch time, so disabling or deleting a tool
+                // stops a replayed call from running.
+                val custom = com.openminis.app.tools.CustomToolStore.find(context, name)
+                if (custom != null) {
+                    com.openminis.app.tools.CustomToolRunner.execute(context, custom, argsJson)
+                } else {
+                    ToolExecutionResult("Unknown tool: $name", false)
+                }
+            }
         }
     }
 
@@ -16501,8 +16518,27 @@ Scheduled tasks: crontab / at / nohup loops will stop when the app is suspended,
                 "dailyChars=${dailyMemoryFragment?.length ?: 0}",
         )
 
+        // [T-custom-tools] User-declared tools get a mention here as well as in
+        // the schema: the "Available tools:" block above is a hardcoded list, so
+        // without this the model sees the tool in the schema but never in the
+        // prose that tells it which tools exist. Kept after `base` so the
+        // static prefix stays byte-stable when no custom tools are installed.
+        val customTools = com.openminis.app.tools.CustomToolStore.enabledTools(context)
+        val customToolsFragment = if (customTools.isEmpty()) null else buildString {
+            append("User-defined tools (installed by the user; run inside the same sandbox):\n")
+            customTools.forEach { t ->
+                append("- ").append(t.name).append(": ")
+                    .append(t.description.replace("\n", " ").trim()).append('\n')
+            }
+            append("Use them exactly like the built-in tools; their parameters are in the schema.")
+        }
+
         return buildString {
             append(base)
+            if (customToolsFragment != null) {
+                append("\n\n")
+                append(customToolsFragment)
+            }
             if (skillFragment != null) {
                 append("\n\n")
                 append(skillFragment)

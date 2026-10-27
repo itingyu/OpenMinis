@@ -22,6 +22,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.Build
+import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.Lan
 import androidx.compose.material.icons.outlined.Dns
 import androidx.compose.material.icons.outlined.Router
@@ -49,13 +51,16 @@ import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Terminal
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -105,6 +110,8 @@ fun SettingsScreen(
     // Agent Runtime section; default no-op for callers that haven't wired
     // the route yet.
     onSoulClick: () -> Unit = {},
+    // [T-custom-tools] Settings › Custom Tools entry.
+    onCustomToolsClick: () -> Unit = {},
     onPermissionsClick: () -> Unit = {},
     onUsageClick: () -> Unit = {},
     onAppearanceClick: () -> Unit = {},
@@ -126,6 +133,10 @@ fun SettingsScreen(
 ) {
     val context = LocalContext.current
     var showFeedbackSheet by remember { mutableStateOf(false) }
+    var showTitleDatePicker by remember { mutableStateOf(false) }
+    var titleDateMode by remember {
+        mutableStateOf(com.openminis.app.data.prefs.SessionTitleDatePrefix.mode(context))
+    }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -229,6 +240,22 @@ fun SettingsScreen(
                     title = stringResource(R.string.settings_soul),
                     subtitle = stringResource(R.string.settings_soul_subtitle),
                     onClick = onSoulClick,
+                )
+                // [T-custom-tools] Right after SOUL: both are "teach the agent".
+                SettingsItem(
+                    icon = Icons.Outlined.Build,
+                    iconColor = Color(0xFF34C759),
+                    title = stringResource(R.string.settings_custom_tools),
+                    subtitle = stringResource(R.string.settings_custom_tools_subtitle),
+                    onClick = onCustomToolsClick,
+                )
+                // [T-title-date-prefix] New-chat titles can carry a date.
+                SettingsItem(
+                    icon = Icons.Outlined.CalendarMonth,
+                    iconColor = Color(0xFFFF9500),
+                    title = stringResource(R.string.settings_title_date_prefix),
+                    subtitle = titleDateMode.label,
+                    onClick = { showTitleDatePicker = true },
                 )
                 SettingsItem(
                     icon = Icons.Outlined.Psychology,
@@ -397,6 +424,41 @@ fun SettingsScreen(
 
             Spacer(Modifier.height(24.dp))
         }
+    }
+
+    // [T-title-date-prefix] Where the stamp goes — or nowhere.
+    if (showTitleDatePicker) {
+        AlertDialog(
+            onDismissRequest = { showTitleDatePicker = false },
+            title = { Text(stringResource(R.string.settings_title_date_prefix)) },
+            text = {
+                Column {
+                    com.openminis.app.data.prefs.SessionTitleDatePrefix.Mode.entries.forEach { m ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    com.openminis.app.data.prefs.SessionTitleDatePrefix
+                                        .setMode(context, m)
+                                    titleDateMode = m
+                                    showTitleDatePicker = false
+                                }
+                                .padding(vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(selected = titleDateMode == m, onClick = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text(m.label)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showTitleDatePicker = false }) {
+                    Text(stringResource(android.R.string.cancel))
+                }
+            },
+        )
     }
 
     if (showFeedbackSheet) {

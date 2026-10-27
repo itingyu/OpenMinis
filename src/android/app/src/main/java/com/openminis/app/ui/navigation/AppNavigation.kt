@@ -183,6 +183,8 @@ object Routes {
     const val MCP = "mcp"
     /** [T-soul-md] SOUL.md editor. */
     const val SOUL = "soul"
+    /** [T-custom-tools] User-defined shell-backed tools. */
+    const val CUSTOM_TOOLS = "custom_tools"
     const val MEMORY_FILE_EDIT = "memory_file/{fileName}/{isGlobal}"
     const val PERMISSIONS = "permissions"
     /**
@@ -662,6 +664,7 @@ fun AppNavigation(
                 onAgentToolsClick = { navController.safeNavigate(Routes.AGENT_TOOLS) },
                 onMcpClick = { navController.safeNavigate(Routes.MCP) },
                 onSoulClick = { navController.safeNavigate(Routes.SOUL) },
+                onCustomToolsClick = { navController.safeNavigate(Routes.CUSTOM_TOOLS) },
                 onPermissionsClick = { navController.safeNavigate(Routes.PERMISSIONS) },
                 onUsageClick = { navController.safeNavigate(Routes.USAGE_STATS) },
                 onAppearanceClick = { navController.safeNavigate(Routes.APPEARANCE) },
@@ -1426,6 +1429,13 @@ fun AppNavigation(
                     envVarRepository = envVarRepository,
                 )
             }
+        }
+
+        // [T-custom-tools] Settings › Custom Tools.
+        composable(Routes.CUSTOM_TOOLS) {
+            com.openminis.app.ui.settings.CustomToolsSettingsScreen(
+                onBack = { navController.safePopBackStack() },
+            )
         }
 
         // [T-soul-md] SOUL.md editor.

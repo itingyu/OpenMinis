@@ -50,6 +50,11 @@ object AgentTools {
         // not a sub agent, an interactive run). Not in the list = does not
         // exist: no schema, no prompt line, no retries on it. Last, as on iOS.
         userAskExposed: Boolean = false,
+        // [T-custom-tools] User-declared tools from Settings › Custom Tools.
+        // Passed in rather than read here so this object stays free of a
+        // Context dependency (it is also called from tests and the iOS-parity
+        // checks). Empty for helpers: a child agent gets the built-in set only.
+        customTools: List<com.openminis.app.tools.CustomTool> = emptyList(),
     ): List<AgentToolDefinition> = buildList {
         add(shellExecuteDefinition())
         add(FileReadTool.definition())
@@ -67,6 +72,9 @@ object AgentTools {
             add(subAgentTaskDefinition(rosterNames))
         }
         if (userAskExposed && !isHelper) add(com.openminis.app.agent.userask.UserAskPromptText.definition())
+        // [T-custom-tools] Last, so a built-in name never gets shadowed by
+        // ordering (CustomToolStore also refuses reserved names outright).
+        if (!isHelper) customTools.forEach { add(it.toDefinition()) }
     }
 
     /**
