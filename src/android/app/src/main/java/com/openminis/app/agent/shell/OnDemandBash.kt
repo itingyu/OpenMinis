@@ -32,7 +32,7 @@ object OnDemandBash {
     /** [FIX-261025-05] FreshProcessShell.CANCELLED_EXIT: the user pressed Stop. */
     private const val STOPPED_EXIT = 130
     const val STOPPED_REASON = "stopped by the user"
-    private const val APK_PROBE_URL = "https://dl-cdn.alpinelinux.org/alpine/"
+    private const val APK_PROBE_URL = "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/"
 
     /** [T-ubuntu-rootfs] Mirror probed before an apt install on Ubuntu. */
     private const val APT_PROBE_URL = "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/"

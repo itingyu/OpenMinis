@@ -13,6 +13,7 @@ import java.io.File
 import java.io.FilterInputStream
 import java.io.InputStream
 import java.nio.charset.Charset
+import java.net.URL
 import java.util.zip.GZIPInputStream
 
 /**
@@ -28,6 +29,8 @@ sealed class RootfsInstallState {
     object Preparing : RootfsInstallState()
     /** progress in 0f..1f, based on compressed asset bytes consumed. */
     data class Extracting(val progress: Float) : RootfsInstallState()
+    /** [T-ubuntu-full] apt is pulling packages: 0..1 plus the current item. */
+    data class Installing(val progress: Float, val detail: String) : RootfsInstallState()
     object Finalizing : RootfsInstallState()
     object Installed : RootfsInstallState()
     data class Failed(val error: String) : RootfsInstallState()
@@ -65,8 +68,17 @@ class RootfsManager private constructor(private val context: Context) {
             val archOk = archFile.exists() && archFile.readText().trim() == ARCH
             if (!archOk) return false
             val recorded = flavorFile.takeIf { it.exists() }?.readText()?.trim()
-                ?: RootfsFlavor.ALPINE.id
-            return recorded == flavor.id
+                ?: RootfsFlavor.UBUNTU.id
+            if (recorded != flavor.id) return false
+            // [T-rootfs-empty-guard] A marker is not proof the tree survived:
+            // a truncated unpack can still stamp `.arch`, and PRoot then dies
+            // on a missing /bin/sh with no way to recover. Demand the shell and
+            // os-release, which every supported distro ships.
+            val sh = File(rootfsDir, "bin/sh")
+            val osRelease = File(rootfsDir, "etc/os-release")
+            val ok = sh.exists() && osRelease.exists() && osRelease.length() > 0L
+            if (!ok) Log.w(TAG, "Rootfs at $rootfsDir is marked installed but unusable; reinstalling")
+            return ok
         }
 
     /**
@@ -80,9 +92,14 @@ class RootfsManager private constructor(private val context: Context) {
     )
     val installState: StateFlow<RootfsInstallState> = _installState.asStateFlow()
 
+    /** [T-ubuntu-full] Lets the package bootstrap publish its own progress. */
+    internal fun publishInstallState(state: RootfsInstallState) {
+        _installState.value = state
+    }
+
     /**
      * Install Alpine rootfs from assets if not already present.
-     * Extracts alpine-minirootfs.tar.gz using manual POSIX tar parsing.
+     * Extracts ubuntu-base-arm64.tar.gz using manual POSIX tar parsing.
      * Progress is published to [installState] (Preparing → Extracting(f) →
      * Finalizing → Installed / Failed).
      */
@@ -103,35 +120,7 @@ class RootfsManager private constructor(private val context: Context) {
             }
             rootfsDir.mkdirs()
 
-            // Extract rootfs from assets.
-            // AAPT may decompress .tar.gz → .tar automatically, so try both names.
-            val assetName = assetNameFor(context.assets, flavor)
-
-            // Asset size for progress calculation — compressed length (for .gz)
-            // or uncompressed length (for .tar). openFd() fails for 0-length
-            // assets on some devices; fall back to 0 which disables progress.
-            val assetTotal: Long = try {
-                context.assets.openFd(assetName).use { it.length }
-            } catch (_: Exception) { 0L }
-
-            // Emit an initial 0% so the UI flips from Preparing → progress bar.
-            _installState.value = RootfsInstallState.Extracting(0f)
-
-            context.assets.open(assetName).use { rawAsset ->
-                // Wrap the ASSET stream (not the gzip stream) so progress tracks
-                // compressed bytes consumed — monotonic and matches the size we
-                // have a total for. Throttle updates to avoid flooding the StateFlow.
-                val progressStream = ProgressInputStream(rawAsset, assetTotal) { fraction ->
-                    _installState.value = RootfsInstallState.Extracting(fraction)
-                }
-                if (assetName.endsWith(".gz")) {
-                    GZIPInputStream(progressStream).use { gzipStream ->
-                        extractTar(gzipStream, rootfsDir)
-                    }
-                } else {
-                    extractTar(progressStream, rootfsDir)
-                }
-            }
+            extractFromAssets()
 
             _installState.value = RootfsInstallState.Finalizing
 
@@ -519,6 +508,66 @@ class RootfsManager private constructor(private val context: Context) {
      * Handles regular files, directories, and symlinks.
      * Does not depend on any external library.
      */
+    /**
+     * Counts bytes pulled from an asset so the extract phase can report how
+     * much of the archive has been consumed.
+     */
+    private class ProgressInputStream(
+        private val inner: java.io.InputStream,
+        private val total: Long,
+        private val onProgress: (Float) -> Unit,
+    ) : java.io.InputStream() {
+        private var read = 0L
+        override fun read(): Int {
+            val b = inner.read()
+            if (b >= 0) tick(1)
+            return b
+        }
+        override fun read(b: ByteArray, off: Int, len: Int): Int {
+            val n = inner.read(b, off, len)
+            if (n > 0) tick(n)
+            return n
+        }
+        private fun tick(n: Int) {
+            read += n
+            if (total > 0) onProgress((read.toFloat() / total).coerceIn(0f, 1f))
+        }
+        override fun close() = inner.close()
+    }
+
+    /** Bundled Ubuntu rootfs → gunzip + tar into [rootfsDir]. */
+        private fun extractFromAssets() {
+        // Extract rootfs from assets.
+        // AAPT may decompress .tar.gz → .tar automatically, so try both names.
+        val assetName = assetNameFor(context.assets, flavor)
+
+        // Asset size for progress calculation — compressed length (for .gz)
+        // or uncompressed length (for .tar). openFd() fails for 0-length
+        // assets on some devices; fall back to 0 which disables progress.
+        val assetTotal: Long = try {
+            context.assets.openFd(assetName).use { it.length }
+        } catch (_: Exception) { 0L }
+
+        // Emit an initial 0% so the UI flips from Preparing → progress bar.
+        _installState.value = RootfsInstallState.Extracting(0f)
+
+        context.assets.open(assetName).use { rawAsset ->
+            // Wrap the ASSET stream (not the gzip stream) so progress tracks
+            // compressed bytes consumed — monotonic and matches the size we
+            // have a total for. Throttle updates to avoid flooding the StateFlow.
+            val progressStream = ProgressInputStream(rawAsset, assetTotal) { fraction ->
+                _installState.value = RootfsInstallState.Extracting(fraction)
+            }
+            if (assetName.endsWith(".gz")) {
+                GZIPInputStream(progressStream).use { gzipStream ->
+                    extractTar(gzipStream, rootfsDir)
+                }
+            } else {
+                extractTar(progressStream, rootfsDir)
+            }
+        }
+    }
+
     internal fun extractTar(input: InputStream, targetDir: File) {
         val header = ByteArray(512)
 
@@ -637,48 +686,6 @@ class RootfsManager private constructor(private val context: Context) {
             val n = input.read(buf, 0, toRead)
             if (n < 0) break
             remaining -= n
-        }
-    }
-
-    /**
-     * InputStream wrapper that reports cumulative bytes read as a 0..1 fraction.
-     * Throttles updates so each +1% bump emits at most once. Designed to wrap
-     * the asset stream (not the gzip stream) so progress is monotonic against
-     * a size we can cheaply know up front.
-     */
-    private class ProgressInputStream(
-        inner: InputStream,
-        private val total: Long,
-        private val onProgress: (Float) -> Unit,
-    ) : FilterInputStream(inner) {
-        private var read: Long = 0
-        private var lastReportedPercent: Int = -1
-
-        override fun read(): Int {
-            val b = super.read()
-            if (b >= 0) { read += 1; publish() }
-            return b
-        }
-
-        override fun read(b: ByteArray, off: Int, len: Int): Int {
-            val n = super.read(b, off, len)
-            if (n > 0) { read += n; publish() }
-            return n
-        }
-
-        override fun skip(n: Long): Long {
-            val skipped = super.skip(n)
-            if (skipped > 0) { read += skipped; publish() }
-            return skipped
-        }
-
-        private fun publish() {
-            if (total <= 0) return
-            val pct = ((read * 100) / total).toInt().coerceIn(0, 99)
-            if (pct != lastReportedPercent) {
-                lastReportedPercent = pct
-                onProgress(pct / 100f)
-            }
         }
     }
 

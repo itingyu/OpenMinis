@@ -154,6 +154,14 @@ object PRootKernel {
 
         // Set default PATH for Alpine Linux
         customEnvironment.putIfAbsent("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/bin")
+
+        // [T-ubuntu-rootfs] Never inherit the host TMPDIR. dpkg maintainer
+        // scripts call `mktemp -t`, and a host path such as
+        // /data/user/0/<pkg>/cache is invisible inside the rootfs — that is
+        // exactly how ca-certificates.postinst dies on Ubuntu ("failed to
+        // create file via template ..."). Guest /tmp is real and writable.
+        customEnvironment["TMPDIR"] = "/tmp"
+        customEnvironment["TMP"] = "/tmp"
         customEnvironment.putIfAbsent("HOME", "/root")
 
         // URL interception: seed $BROWSER directly into every process envp

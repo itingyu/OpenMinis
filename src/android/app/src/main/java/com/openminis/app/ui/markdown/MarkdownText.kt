@@ -111,13 +111,10 @@ private fun BlockContent(
     when (block) {
         is MarkdownParser.Block.Heading -> HeadingBlock(block, color, mathSpans)
         is MarkdownParser.Block.Paragraph -> ParagraphBlock(block.content, color, baseStyle, mathSpans)
-        // [T-mermaid] A ```mermaid fence is a diagram, not code to copy.
-        is MarkdownParser.Block.CodeBlock ->
-            if (block.language.trim().equals("mermaid", ignoreCase = true)) {
-                MermaidBlockView(source = block.code.trim())
-            } else {
-                CodeBlockView(block)
-            }
+        // [T-mermaid-off] Diagram rendering removed: a ```mermaid fence is
+        // shown as an ordinary code block, so its source stays readable and
+        // copyable instead of failing to paint.
+        is MarkdownParser.Block.CodeBlock -> CodeBlockView(block)
         is MarkdownParser.Block.Blockquote -> BlockquoteView(block, color, baseStyle, mathSpans)
         is MarkdownParser.Block.BulletList -> BulletListView(block, color, baseStyle, mathSpans)
         is MarkdownParser.Block.NumberedList -> NumberedListView(block, color, baseStyle, mathSpans)

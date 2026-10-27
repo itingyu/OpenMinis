@@ -89,7 +89,7 @@ fun RootfsManagementScreen(
             text = {
                 Text(
                     "首次切换需要解压 rootfs" +
-                        if (f.isAlpine) "（约需 10 秒）。" else "，随后首次启动会联网安装基础软件包（bash/git/python3 等，约 3-10 分钟）。"
+                        "，随后首次启动会联网安装基础软件包（bash/git/python3 等，约 3-10 分钟）。"
                 )
             },
             confirmButton = {
@@ -138,7 +138,7 @@ fun RootfsManagementScreen(
                     ListItem(
                         headlineContent = { Text(f.label) },
                         supportingContent = {
-                            Text(if (f.isAlpine) "轻量、约 60 MB" else "完整、glibc、可用 apt")
+                            Text("完整、glibc、可用 apt")
                         },
                         trailingContent = {
                             RadioButton(

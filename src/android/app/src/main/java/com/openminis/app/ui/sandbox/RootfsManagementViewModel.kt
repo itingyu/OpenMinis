@@ -54,6 +54,15 @@ class RootfsManagementViewModel : ViewModel() {
                             statusMessage = "Extracting rootfs… ${(state.progress * 100).toInt()}%",
                             installProgress = state.progress,
                         )
+                    is RootfsInstallState.Installing ->
+                        _uiState.value = _uiState.value.copy(
+                            statusMessage = if (state.detail.isBlank()) {
+                                "Installing packages… ${(state.progress * 100).toInt()}%"
+                            } else {
+                                "Installing packages… ${(state.progress * 100).toInt()}% · ${state.detail}"
+                            },
+                            installProgress = state.progress,
+                        )
                     is RootfsInstallState.Finalizing ->
                         _uiState.value = _uiState.value.copy(
                             statusMessage = "Finalizing…",

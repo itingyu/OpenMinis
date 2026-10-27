@@ -32,7 +32,10 @@ import java.security.MessageDigest
 internal object RenderDiskCache {
 
     /** Bump whenever renderer output changes shape (not on every app build). */
-    private const val VERSION = 1
+    // [T-mermaid-viewport] Bump when the renderer output changes shape: v1
+    // entries were captured with the WebView's 980px default viewport and are
+    // missing the right-hand side of wide diagrams.
+    private const val VERSION = 2
 
     /** Total budget across all namespaces; trimmed oldest-first after a write. */
     private const val MAX_BYTES = 96L * 1024 * 1024
@@ -71,6 +74,14 @@ internal object RenderDiskCache {
             val meta = runCatching {
                 JSONObject(File(base.path + ".json").readText())
             }.getOrNull() ?: return@withContext null
+            // [T-mermaid-capture-retry] Older builds could cache an unpainted
+            // (fully transparent) capture; such an entry would paint a black
+            // hole forever, so drop it and let the diagram re-render.
+            if (isBlank(bitmap)) {
+                bitmap.recycle()
+                png.delete()
+                return@withContext null
+            }
             val cssW = meta.optInt("w", 0)
             val cssH = meta.optInt("h", 0)
             if (cssW <= 0 || cssH <= 0) return@withContext null
@@ -133,4 +144,19 @@ internal object RenderDiskCache {
             File(ctx.cacheDir, "render-cache-v$VERSION").deleteRecursively()
         }
     }
+}
+
+/** Sampling check for a capture that holds no visible pixel. */
+private fun isBlank(bmp: Bitmap): Boolean {
+    val stride = 8
+    var x = 0
+    while (x < bmp.width) {
+        var y = 0
+        while (y < bmp.height) {
+            if (android.graphics.Color.alpha(bmp.getPixel(x, y)) > 8) return false
+            y += stride
+        }
+        x += stride
+    }
+    return true
 }

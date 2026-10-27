@@ -50,13 +50,18 @@ object AgentTools {
         // not a sub agent, an interactive run). Not in the list = does not
         // exist: no schema, no prompt line, no retries on it. Last, as on iOS.
         userAskExposed: Boolean = false,
-        // [T-custom-tools] User-declared tools from Settings › Custom Tools.
-        // Passed in rather than read here so this object stays free of a
-        // Context dependency (it is also called from tests and the iOS-parity
-        // checks). Empty for helpers: a child agent gets the built-in set only.
-        customTools: List<com.openminis.app.tools.CustomTool> = emptyList(),
+        // [T-ubuntu-rootfs] The sandbox may be Ubuntu now; telling the model
+        // "Alpine Linux" while `apk` does not exist is worse than saying
+        // nothing. Caller passes the active distro's label.
+        sandboxLabel: String = "Alpine Linux",
+        // [T-tool-toggles] Core tools the user switched off in Settings.
+        disabledTools: Set<String> = emptySet(),
+        // [T-tool-rename] User-supplied display names / descriptions. Keyed by
+        // the built-in name; dispatch maps the model's name back via
+        // ToolToggleStore.realName, so renaming never needs a new executor.
+        toolOverrides: Map<String, ToolToggleStore.Override> = emptyMap(),
     ): List<AgentToolDefinition> = buildList {
-        add(shellExecuteDefinition())
+        add(shellExecuteDefinition(sandboxLabel))
         add(FileReadTool.definition())
         add(FileWriteTool.definition())
         add(FileEditTool.definition())
@@ -72,10 +77,11 @@ object AgentTools {
             add(subAgentTaskDefinition(rosterNames))
         }
         if (userAskExposed && !isHelper) add(com.openminis.app.agent.userask.UserAskPromptText.definition())
-        // [T-custom-tools] Last, so a built-in name never gets shadowed by
-        // ordering (CustomToolStore also refuses reserved names outright).
-        if (!isHelper) customTools.forEach { add(it.toDefinition()) }
-    }
+    }.filterNot { it.name in disabledTools }
+        .map { def ->
+            val o = toolOverrides[def.name] ?: return@map def
+            def.copy(name = o.name, description = o.description ?: def.description)
+        }
 
     /**
      * [T-sub-agents-v1] The one sub agent tool: delegate, and inspect or stop
@@ -123,9 +129,9 @@ object AgentTools {
         )
 
     // Aligned with iOS AIChatViewModel.swift:4982-4993
-    private fun shellExecuteDefinition(): AgentToolDefinition = AgentToolDefinition(
+    private fun shellExecuteDefinition(sandboxLabel: String = "Alpine Linux"): AgentToolDefinition = AgentToolDefinition(
         name = "shell_execute",
-        description = "Execute a command in an isolated Linux process (Alpine Linux via PRoot). " +
+        description = "Execute a command in an isolated Linux process ($sandboxLabel via PRoot). " +
             "The command runs via /bin/sh -c with stdout and stderr merged. " +
             "Each invocation spawns a fresh process — there is no shared terminal session. " +
             "Default timeout is 15 minutes.",

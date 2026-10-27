@@ -2606,10 +2606,9 @@ private fun RenderBlock(block: MdBlock) {
         }
 
         is MdBlock.CodeBlock -> {
-            // [T-mermaid] Fence tagged mermaid is a diagram, not copyable code.
-            if (block.language.trim().equals("mermaid", ignoreCase = true)) {
-                com.openminis.app.ui.markdown.MermaidBlockView(source = block.code.trim())
-            } else {
+            // [T-mermaid-off] Diagrams are no longer rendered; the fence is
+            // shown as a normal code block.
+            run {
                 // [T-in-chat-search] Phase 1: a code block holding the current
                 // match is outlined as a whole.
                 val codeSearchCurrent = com.openminis.app.ui.chat.search.chatSearchFieldIsCurrent(

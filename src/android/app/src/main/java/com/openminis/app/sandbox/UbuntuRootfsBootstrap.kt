@@ -18,16 +18,43 @@ import kotlinx.coroutines.sync.withLock
 internal object UbuntuRootfsBootstrap {
 
     private const val TAG = "UbuntuRootfs"
-    private const val MARKER = ".minis-base-ok"
-    private const val BUDGET_MS = 15 * 60 * 1000L
+    // [T-ubuntu-full] Bumped so an existing base install runs the
+    // install again: apt skips what is present and adds the new packages.
+    private const val MARKER = ".minis-full-ok"
+    private const val BUDGET_MS = 20 * 60 * 1000L
+    /** Small enough that a batch finishes in a few minutes, big enough for apt. */
+    private const val BATCH_SIZE = 8
 
     private val mutex = Mutex()
 
-    /** Packages every fresh Ubuntu sandbox gets, roughly Alpine's busybox set. */
+    /**
+     * [T-ubuntu-full] A complete working system rather than a bare base:
+     * compilers, the usual CLI surface, networking diagnostics, media tools
+     * and the Python scientific stack. `ubuntu-base` ships nothing but dpkg
+     * and apt, so without this the sandbox answers "command not found" for
+     * almost everything a script expects.
+     *
+     * Installed once on first boot; ~700 MB unpacked. Users who want the
+     * lean image can still run `apt-get purge` themselves.
+     */
     private val BASE_PACKAGES = listOf(
-        "bash", "ca-certificates", "curl", "wget", "git", "ripgrep", "less",
-        "procps", "coreutils", "findutils", "tar", "xz-utils", "unzip", "zip",
-        "python3", "python3-pip", "python3-venv", "jq", "nano", "openssh-client",
+        // shell & core utilities
+        "bash", "coreutils", "findutils", "procps", "psmisc", "less", "file",
+        "tree", "rsync", "tar", "xz-utils", "unzip", "zip", "bzip2", "gzip",
+        "ca-certificates", "openssl", "locales", "tzdata", "sudo", "nano", "vim-tiny",
+        // dev toolchain
+        "build-essential", "pkg-config", "make", "cmake", "gcc", "g++",
+        "python3-dev", "libssl-dev", "libffi-dev", "zlib1g-dev",
+        // python
+        "python3", "python3-pip", "python3-venv", "python3-numpy",
+        "python3-pandas", "python3-requests", "python3-yaml",
+        // network
+        "curl", "wget", "git", "openssh-client", "dnsutils", "iproute2",
+        "net-tools", "netcat-openbsd", "telnet", "sshpass",
+        // text / data
+        "ripgrep", "jq", "sqlite3", "gawk", "sed", "grep", "diffutils",
+        // media
+        "ffmpeg", "imagemagick",
     )
 
     private fun marker(rootfsDir: File) = File(rootfsDir, MARKER)
@@ -43,20 +70,49 @@ internal object UbuntuRootfsBootstrap {
         runCatching { writeSourcesList(rootfs) }
             .onFailure { Log.w(TAG, "sources.list rewrite failed: ${it.message}") }
 
-        Log.i(TAG, "Installing base packages into $rootfs (first boot)")
-        val script = installScript()
-        val result = runCatching {
-            ShellExecutor.execute(context = app, command = script, timeout = BUDGET_MS)
-        }.getOrNull()
-        val out = result?.output.orEmpty()
-        if (out.contains("MINIS_UBUNTU_BASE_OK")) {
-            marker(rootfs).writeText("ok")
-            Log.i(TAG, "Ubuntu base packages installed")
-            true
-        } else {
-            Log.w(TAG, "Ubuntu base install incomplete: ${out.takeLast(400)}")
-            false
+        Log.i(TAG, "Installing packages into $rootfs (first boot)")
+        val manager = RootfsManager.getInstance(app)
+        val batches = BASE_PACKAGES.chunked(BATCH_SIZE)
+        var done = 0
+        var lastDetail = ""
+        for ((index, batch) in batches.withIndex()) {
+            val base = index.toFloat() / batches.size
+            manager.publishInstallState(
+                RootfsInstallState.Installing(base, "batch ${index + 1}/${batches.size}: ${batch.first()} …"),
+            )
+            val script = installScript(batch)
+            val result = runCatching {
+                ShellExecutor.execute(
+                    context = app,
+                    command = script,
+                    timeout = BUDGET_MS,
+                    lineCallback = { line ->
+                        // apt prints one "Setting up <pkg> …" per package; using
+                        // it as the detail keeps the user informed during a
+                        // multi-minute batch without pretending to know a total.
+                        if (line.startsWith("Setting up ")) {
+                            lastDetail = line.removePrefix("Setting up ").substringBefore(' ').take(40)
+                        }
+                    },
+                )
+            }.getOrNull()
+            val out = result?.output.orEmpty()
+            if (!out.contains("MINIS_UBUNTU_BASE_OK")) {
+                Log.w(TAG, "batch ${index + 1} incomplete: ${out.takeLast(400)}")
+                manager.publishInstallState(
+                    RootfsInstallState.Failed("apt failed on batch ${index + 1}"),
+                )
+                return@withLock false
+            }
+            done++
+            manager.publishInstallState(
+                RootfsInstallState.Installing(done.toFloat() / batches.size, lastDetail),
+            )
         }
+        marker(rootfs).writeText("ok")
+        manager.publishInstallState(RootfsInstallState.Installed)
+        Log.i(TAG, "Ubuntu packages installed")
+        true
     }
 
     /**
@@ -81,15 +137,15 @@ internal object UbuntuRootfsBootstrap {
         File(rootfsDir, "etc/apt/sources.list").writeText("")
     }
 
-    internal fun installScript(): String {
-        val packages = BASE_PACKAGES.joinToString(" ")
+    internal fun installScript(packages: List<String> = BASE_PACKAGES): String {
+        val joined = packages.joinToString(" ")
         return """
             |export DEBIAN_FRONTEND=noninteractive
             |export LC_ALL=C
             |mkdir -p /var/lib/apt/lists/partial /var/cache/apt/archives/partial
             |chmod 755 /var/lib/apt/lists /var/lib/apt/lists/partial
             |apt-get update -o Acquire::Retries=3 || exit 1
-            |apt-get install -y --no-install-recommends $packages || exit 1
+            |apt-get install -y --no-install-recommends $joined || exit 1
             |apt-get clean
             |rm -rf /var/lib/apt/lists/*
             |echo MINIS_UBUNTU_BASE_OK

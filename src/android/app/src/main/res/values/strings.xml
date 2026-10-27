@@ -2723,8 +2723,6 @@
     <string name="mcp_dcr_http_status">%1$s returned HTTP %2$d.</string>
     <string name="mcp_dcr_unreadable">%1$s returned data that could not be read.</string>
     <string name="custom_tools_title">Custom Tools</string>
-    <string name="settings_custom_tools">Custom Tools</string>
-    <string name="settings_custom_tools_subtitle">Add your own tools backed by shell commands</string>
     <string name="custom_tools_footer">Disable a tool to hide it from the model without deleting it.</string>
     <string name="custom_tools_empty">No custom tools yet.</string>
     <string name="custom_tools_empty_footer">A custom tool exposes a shell command to the model, exactly like a built-in tool. Import a preset below or add your own.</string>
@@ -2749,4 +2747,12 @@
     <string name="scheduled_task_folder_none">No group</string>
     <string name="scheduled_task_title_date">Date prefix in chat title</string>
     <string name="scheduled_task_title_date_hint">Opened chats get a "0901" stamp; this task only</string>
+    <string name="settings_prompt_sections">System prompt</string>
+    <string name="settings_prompt_sections_subtitle">Edit the environment and file rules the agent receives; distro-aware defaults</string>
+    <string name="prompt_sections_title">System prompt</string>
+    <string name="prompt_sections_footer">These sections are injected into every request. Defaults follow the sandbox distro; edits apply to the next message.</string>
+    <string name="prompt_section_customized">Customized</string>
+    <string name="prompt_section_default">Default</string>
+    <string name="prompt_preview_title">Preview assembled prompt</string>
+    <string name="prompt_section_reset">Reset to default</string>
 </resources>

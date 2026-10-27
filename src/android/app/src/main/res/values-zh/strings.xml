@@ -2522,8 +2522,6 @@
     <string name="mcp_dcr_http_status">%1$s 返回了 HTTP %2$d。</string>
     <string name="mcp_dcr_unreadable">%1$s 返回的数据无法读取。</string>
     <string name="custom_tools_title">自定义工具</string>
-    <string name="settings_custom_tools">自定义工具</string>
-    <string name="settings_custom_tools_subtitle">用 shell 命令添加你自己的工具</string>
     <string name="custom_tools_footer">关闭开关即可对模型隐藏该工具，不必删除。</string>
     <string name="custom_tools_empty">还没有自定义工具。</string>
     <string name="custom_tools_empty_footer">自定义工具让模型直接调用一条 shell 命令，和内置工具没有区别。可在下方导入预置，或自己添加。</string>
@@ -2548,4 +2546,12 @@
     <string name="scheduled_task_folder_none">不分组</string>
     <string name="scheduled_task_title_date">定时任务会话标题带日期</string>
     <string name="scheduled_task_title_date_hint">新建会话标题前加「0901」，仅对该任务生效</string>
+    <string name="settings_prompt_sections">系统提示词</string>
+    <string name="settings_prompt_sections_subtitle">编辑注入给模型的环境与文件规则，默认值随发行版变化</string>
+    <string name="prompt_sections_title">系统提示词</string>
+    <string name="prompt_sections_footer">这些段落会拼进每轮请求的系统提示词。默认值随沙箱发行版变化；修改后立即生效，无需重启。</string>
+    <string name="prompt_section_customized">已修改</string>
+    <string name="prompt_section_default">默认</string>
+    <string name="prompt_preview_title">预览最终提示词</string>
+    <string name="prompt_section_reset">恢复默认</string>
 </resources>

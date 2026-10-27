@@ -45,6 +45,7 @@ import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Groups
+import androidx.compose.material.icons.outlined.Article
 import androidx.compose.material.icons.outlined.Handyman
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.automirrored.outlined.Send
@@ -103,6 +104,8 @@ fun SettingsScreen(
     /** [T-p2-agent-settings] Settings › Agents (delegation on/off), below Memory. */
     onAgentsClick: () -> Unit = {},
     onAgentToolsClick: () -> Unit = {},
+    /** [T-prompt-sections] Settings › System prompt (editable sections). */
+    onPromptSectionsClick: () -> Unit = {},
     // [T-mcp-integration-android] MCP Integrations page, listed directly below
     // Memory. Default no-op for callers that haven't wired the route yet.
     onMcpClick: () -> Unit = {},
@@ -110,8 +113,6 @@ fun SettingsScreen(
     // Agent Runtime section; default no-op for callers that haven't wired
     // the route yet.
     onSoulClick: () -> Unit = {},
-    // [T-custom-tools] Settings › Custom Tools entry.
-    onCustomToolsClick: () -> Unit = {},
     onPermissionsClick: () -> Unit = {},
     onUsageClick: () -> Unit = {},
     onAppearanceClick: () -> Unit = {},
@@ -209,6 +210,13 @@ fun SettingsScreen(
             SettingsSection(title = stringResource(R.string.settings_section_agent_runtime)) {
                 // [T-tools-granular-switches] Which optional tools the agent may use.
                 SettingsItem(
+                    icon = Icons.Outlined.Article,
+                    iconColor = Color(0xFF8E8E93),
+                    title = stringResource(R.string.settings_prompt_sections),
+                    subtitle = stringResource(R.string.settings_prompt_sections_subtitle),
+                    onClick = onPromptSectionsClick,
+                )
+                SettingsItem(
                     icon = Icons.Outlined.Handyman,
                     iconColor = Color(0xFF5E5CE6),
                     title = stringResource(R.string.settings_agent_tools),
@@ -236,14 +244,6 @@ fun SettingsScreen(
                     title = stringResource(R.string.settings_soul),
                     subtitle = stringResource(R.string.settings_soul_subtitle),
                     onClick = onSoulClick,
-                )
-                // [T-custom-tools] Right after SOUL: both are "teach the agent".
-                SettingsItem(
-                    icon = Icons.Outlined.Build,
-                    iconColor = Color(0xFF34C759),
-                    title = stringResource(R.string.settings_custom_tools),
-                    subtitle = stringResource(R.string.settings_custom_tools_subtitle),
-                    onClick = onCustomToolsClick,
                 )
                 SettingsItem(
                     icon = Icons.Outlined.Psychology,

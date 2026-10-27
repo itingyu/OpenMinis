@@ -1,5 +1,19 @@
 package com.openminis.app.ui.settings
 
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -40,7 +54,60 @@ fun AgentToolsSettingsScreen(onBack: () -> Unit) {
     }
     var showWaitPicker by remember { mutableStateOf(false) }
 
+    // [T-tool-toggles] Recompose after a switch flip; the store is not observable.
+    var togglesVersion by remember { mutableStateOf(0) }
+    // [T-tool-rename] Which built-in tool the rename dialog is editing.
+    var editingTool by remember { mutableStateOf<String?>(null) }
+    var editName by remember { mutableStateOf("") }
+    var editDesc by remember { mutableStateOf("") }
+
     SettingsScaffold(title = stringResource(R.string.settings_agent_tools), onBack = onBack) {
+        // [T-tool-toggles] Core tools shipped with the app — the user could not
+        // shape these at all before, only the optional ones below.
+        SettingsSection(
+            header = "内置工具",
+            footer = "关闭后该工具不再出现在模型的工具列表里，下一轮请求生效。",
+        ) {
+            @Suppress("UNUSED_EXPRESSION") togglesVersion
+            com.openminis.app.tools.ToolToggleStore.TOGGLES.forEachIndexed { i, t ->
+                // [T-tool-rename] Tap the row to rename / re-describe what the
+                // model sees. The switch stays a plain on/off.
+                val o = com.openminis.app.tools.ToolToggleStore.override(context, t.name)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(enabled = editingTool == null) {
+                            editingTool = t.name
+                            editName = o?.name ?: t.name
+                            editDesc = o?.description ?: ""
+                        }
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = o?.name ?: t.label,
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                        Text(
+                            text = if (o != null) "原名 ${t.name}" else t.description,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = com.openminis.app.tools.ToolToggleStore.isEnabled(context, t.name),
+                        onCheckedChange = {
+                            com.openminis.app.tools.ToolToggleStore.setEnabled(context, t.name, it)
+                            togglesVersion++
+                        },
+                    )
+                }
+                if (i != com.openminis.app.tools.ToolToggleStore.TOGGLES.lastIndex) {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                }
+            }
+        }
         SettingsSection(footer = stringResource(R.string.agent_tools_browser_footer)) {
             SettingsSwitchRow(
                 title = stringResource(R.string.agent_tools_browser),
@@ -108,6 +175,58 @@ fun AgentToolsSettingsScreen(onBack: () -> Unit) {
                     androidx.compose.material3.TextButton(onClick = { showWaitPicker = false }) {
                         androidx.compose.material3.Text(stringResource(R.string.user_ask_cancel))
                     }
+                },
+            )
+        }
+        // [T-tool-rename] Rename / re-describe a built-in tool.
+        editingTool?.let { tool ->
+            AlertDialog(
+                onDismissRequest = { editingTool = null },
+                title = { Text("自定义工具名与描述") },
+                text = {
+                    Column {
+                        OutlinedTextField(
+                            value = editName,
+                            onValueChange = { if (it.length <= 64) editName = it },
+                            label = { Text("工具名（模型看到的）") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Text(
+                            "只能用小写字母、数字、下划线；留空恢复原名 $tool。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
+                        )
+                        OutlinedTextField(
+                            value = editDesc,
+                            onValueChange = { editDesc = it },
+                            label = { Text("描述（留空用内置描述）") },
+                            minLines = 4,
+                            maxLines = 10,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                },
+                confirmButton = {
+                    val nameOk = editName.isBlank() || Regex("[a-z][a-z0-9_]{0,40}").matches(editName.trim())
+                    androidx.compose.material3.TextButton(
+                        enabled = nameOk,
+                        onClick = {
+                            com.openminis.app.tools.ToolToggleStore.setOverride(
+                                context, tool, editName.trim(), editDesc,
+                            )
+                            togglesVersion++
+                            editingTool = null
+                        },
+                    ) { Text(androidx.compose.ui.res.stringResource(android.R.string.ok)) }
+                },
+                dismissButton = {
+                    androidx.compose.material3.TextButton(onClick = {
+                        com.openminis.app.tools.ToolToggleStore.clearOverride(context, tool)
+                        togglesVersion++
+                        editingTool = null
+                    }) { Text("恢复默认") }
                 },
             )
         }

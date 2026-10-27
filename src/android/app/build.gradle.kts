@@ -462,6 +462,9 @@ dependencies {
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
+    // [T-kali-rootfs] Kali's rootfs is only published as .tar.xz (LXC images);
+    // pure-Java decoder, ~120 KB, no native bits.
+
     // T283: ACRA — local crash report capture. acra-core only (no http
     // sender, no network permission). CrashFileSender writes reports to
     // filesDir/logs/ where LogManagementScreen surfaces them.

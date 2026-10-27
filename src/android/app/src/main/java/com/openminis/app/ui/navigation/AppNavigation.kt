@@ -179,12 +179,12 @@ object Routes {
     const val SUB_AGENT_DETAIL = "sub_agent/{agentId}"
     /** [T-tools-granular-switches] Settings > Agent Runtime > Tools. */
     const val AGENT_TOOLS = "agent_tools"
+    const val PROMPT_SECTIONS = "prompt_sections"
     /** [T-mcp-integration-android] MCP Integrations management screen. */
     const val MCP = "mcp"
     /** [T-soul-md] SOUL.md editor. */
     const val SOUL = "soul"
     /** [T-custom-tools] User-defined shell-backed tools. */
-    const val CUSTOM_TOOLS = "custom_tools"
     const val MEMORY_FILE_EDIT = "memory_file/{fileName}/{isGlobal}"
     const val PERMISSIONS = "permissions"
     /**
@@ -662,9 +662,9 @@ fun AppNavigation(
                 onMemoryClick = { navController.safeNavigate(Routes.MEMORY) },
                 onAgentsClick = { navController.safeNavigate(Routes.AGENTS) },
                 onAgentToolsClick = { navController.safeNavigate(Routes.AGENT_TOOLS) },
+                onPromptSectionsClick = { navController.safeNavigate(Routes.PROMPT_SECTIONS) },
                 onMcpClick = { navController.safeNavigate(Routes.MCP) },
                 onSoulClick = { navController.safeNavigate(Routes.SOUL) },
-                onCustomToolsClick = { navController.safeNavigate(Routes.CUSTOM_TOOLS) },
                 onPermissionsClick = { navController.safeNavigate(Routes.PERMISSIONS) },
                 onUsageClick = { navController.safeNavigate(Routes.USAGE_STATS) },
                 onAppearanceClick = { navController.safeNavigate(Routes.APPEARANCE) },
@@ -1431,12 +1431,6 @@ fun AppNavigation(
             }
         }
 
-        // [T-custom-tools] Settings › Custom Tools.
-        composable(Routes.CUSTOM_TOOLS) {
-            com.openminis.app.ui.settings.CustomToolsSettingsScreen(
-                onBack = { navController.safePopBackStack() },
-            )
-        }
 
         // [T-soul-md] SOUL.md editor.
         composable(Routes.SOUL) {
@@ -1539,6 +1533,12 @@ fun AppNavigation(
         ) { entry ->
             com.openminis.app.ui.settings.SubAgentDetailScreen(
                 agentId = entry.arguments?.getString("agentId").orEmpty(),
+                onBack = { navController.safePopBackStack() },
+            )
+        }
+
+        composable(Routes.PROMPT_SECTIONS) {
+            com.openminis.app.ui.settings.PromptSettingsScreen(
                 onBack = { navController.safePopBackStack() },
             )
         }
