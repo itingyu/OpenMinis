@@ -32,10 +32,7 @@ object OnDemandBash {
     /** [FIX-261025-05] FreshProcessShell.CANCELLED_EXIT: the user pressed Stop. */
     private const val STOPPED_EXIT = 130
     const val STOPPED_REASON = "stopped by the user"
-    private const val APK_PROBE_URL = "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/"
-
-    /** [T-ubuntu-rootfs] Mirror probed before an apt install on Ubuntu. */
-    private const val APT_PROBE_URL = "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/"
+    private const val APK_PROBE_URL = "https://dl-cdn.alpinelinux.org/alpine/"
 
     private sealed class Availability {
         object Unknown : Availability()
@@ -86,16 +83,13 @@ object OnDemandBash {
         }
         attemptedInstallThisLaunch = true
 
-        if (!networkReachable(context)) {
+        if (!networkReachable()) {
             recordFailure(context); markUnavailable()
             return Outcome.Unavailable("network/apk mirror unreachable")
         }
 
         Log.i(TAG, "installing bash (budget ${INSTALL_BUDGET_MS / 1000}s)…")
-        // [T-ubuntu-rootfs] Alpine uses apk, Ubuntu uses apt; ask the rootfs
-        // which one it is instead of assuming busybox userland.
-        val installCmd = installCommand(context)
-        val rc = executor.run(installCmd, INSTALL_BUDGET_MS)
+        val rc = executor.run("apk add bash", INSTALL_BUDGET_MS)
         if (rc == STOPPED_EXIT) {
             // [FIX-261025-05] Stopped mid-install by the user: not a failed
             // install, so no strike and no back-off; a later command may
@@ -120,12 +114,6 @@ object OnDemandBash {
         return Outcome.Unavailable("apk add bash failed (rc=$rc)")
     }
 
-    /** `apk add bash` on Alpine, `apt-get install -y bash` on Ubuntu. */
-    private fun installCommand(context: android.content.Context): String {
-        val flavor = com.openminis.app.sandbox.RootfsFlavorPrefs.current(context)
-        return "${flavor.pkgInstall} bash"
-    }
-
     /** Called when `bash <file>` itself returned 127 (user apk del'd) — M5. */
     suspend fun markDisappeared() = lock.withLock { availability = Availability.Unknown }
 
@@ -136,8 +124,7 @@ object OnDemandBash {
     private fun backoffReason(context: Context): String? {
         val p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val count = p.getInt(KEY_FAIL_COUNT, 0)
-        val manual = installCommand(context)
-        if (count >= MAX_STRIKES) return "bash install disabled after $MAX_STRIKES failures (retry manually: $manual)"
+        if (count >= MAX_STRIKES) return "bash install disabled after $MAX_STRIKES failures (retry manually: apk add bash)"
         val last = p.getLong(KEY_LAST_FAIL, 0)
         if (last > 0 && System.currentTimeMillis() - last < BACKOFF_WINDOW_MS) return "bash install backing off (recent failure)"
         return null
@@ -154,13 +141,12 @@ object OnDemandBash {
             .remove(KEY_FAIL_COUNT).remove(KEY_LAST_FAIL).apply()
     }
 
-    private suspend fun networkReachable(context: Context): Boolean = withContext(Dispatchers.IO) {
+    private suspend fun networkReachable(): Boolean = withContext(Dispatchers.IO) {
         try {
             // [FEAT-261021-16] Probe the way the shell's `apk add` will go: its
             // route in Settings > Network (unrouted: the same HttpURLConnection HEAD).
-            val probeUrl = if (installCommand(context).startsWith("apt")) APT_PROBE_URL else APK_PROBE_URL
             val code = com.openminis.app.network.NetworkUrlRequest.open(
-                com.openminis.app.network.NetworkScope.SHELL.tag, probeUrl, "HEAD",
+                com.openminis.app.network.NetworkScope.SHELL.tag, APK_PROBE_URL, "HEAD",
                 connectTimeoutMs = 5000, readTimeoutMs = 5000,
             ).use { it.code }
             code in 200..499

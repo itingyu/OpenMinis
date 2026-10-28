@@ -8,7 +8,6 @@ import android.os.Environment
 import android.os.storage.StorageManager
 import android.provider.DocumentsContract
 import android.util.Log
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.withLock
 import com.openminis.app.data.FileMentionIndex
 import com.openminis.app.data.MountedFoldersStore
@@ -154,14 +153,6 @@ object PRootKernel {
 
         // Set default PATH for Alpine Linux
         customEnvironment.putIfAbsent("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/bin")
-
-        // [T-ubuntu-rootfs] Never inherit the host TMPDIR. dpkg maintainer
-        // scripts call `mktemp -t`, and a host path such as
-        // /data/user/0/<pkg>/cache is invisible inside the rootfs — that is
-        // exactly how ca-certificates.postinst dies on Ubuntu ("failed to
-        // create file via template ..."). Guest /tmp is real and writable.
-        customEnvironment["TMPDIR"] = "/tmp"
-        customEnvironment["TMP"] = "/tmp"
         customEnvironment.putIfAbsent("HOME", "/root")
 
         // URL interception: seed $BROWSER directly into every process envp
@@ -256,17 +247,6 @@ object PRootKernel {
         applyMountedFoldersSnapshot(context)
 
         isBooted = true
-
-        // [T-ubuntu-rootfs] Ubuntu's base image has no bash/git/curl/python —
-        // one apt run fills that in. Kick it off here, now that proot and the
-        // bind mounts are live; it must not block the caller (the first chat
-        // turn would stall for minutes), and it is idempotent via a marker.
-        if (rootfsManager.flavor == RootfsFlavor.UBUNTU) {
-            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
-                UbuntuRootfsBootstrap.ensureBaseInstalled(context)
-            }
-        }
-
         Log.i(TAG, "PRoot kernel booted " +
             "rootfs=${rootfsManager.rootfsDir.absolutePath} " +
             "nativeLibDir=$nativeLibDir " +

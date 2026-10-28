@@ -50,9 +50,8 @@ object AgentTools {
         // not a sub agent, an interactive run). Not in the list = does not
         // exist: no schema, no prompt line, no retries on it. Last, as on iOS.
         userAskExposed: Boolean = false,
-        // [T-ubuntu-rootfs] The sandbox may be Ubuntu now; telling the model
-        // "Alpine Linux" while `apk` does not exist is worse than saying
-        // nothing. Caller passes the active distro's label.
+        // [T-alpine-only] One distro again: Alpine. Kept as a parameter so the
+        // description can still be overridden by tests.
         sandboxLabel: String = "Alpine Linux",
         // [T-tool-toggles] Core tools the user switched off in Settings.
         disabledTools: Set<String> = emptySet(),

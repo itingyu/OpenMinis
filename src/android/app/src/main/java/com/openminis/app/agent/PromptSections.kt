@@ -1,13 +1,10 @@
 package com.openminis.app.agent
 
 import android.content.Context
-import com.openminis.app.sandbox.RootfsFlavor
-import com.openminis.app.sandbox.RootfsFlavorPrefs
-
 /**
  * [T-prompt-sections] The user-editable halves of the system prompt.
  *
- * Everything here is prose the model reads: the sandbox contract (per distro),
+ * Everything here is prose the model reads: the sandbox contract,
  * the Android CLI inventory, file-search rules and output style. Each section
  * can be edited, switched off entirely, and is available in both Chinese and
  * English — the language follows the app UI unless the user pins one.
@@ -28,9 +25,11 @@ object PromptSections {
 
     enum class Id(val key: String, val titleZh: String, val titleEn: String, val defaultOn: Boolean) {
         SANDBOX("sandbox", "沙箱环境", "Sandbox", true),
-        ANDROID_CLI("android_cli", "Android 命令行工具", "Android CLI tools", true),
-        FILES("files", "文件与检索", "Files & search", true),
-        COLLAB("collab", "协作与输出", "Collaboration", true),
+        ANDROID_CLI("android_cli2", "Android 命令行工具", "Android CLI tools", true),
+        MINIS_CLI("minis_cli", "Minis 命令行工具", "Minis CLI tools", true),
+        // No FILES / COLLAB sections: SOUL.md already carries the file layout,
+        // the token-discipline rules and the deliverable conventions. Repeating
+        // them here only doubled the prompt and let the two copies drift.
     }
 
     private const val PREFS = "prompt_sections"
@@ -73,10 +72,9 @@ object PromptSections {
 
     fun default(context: Context, id: Id, zh: Boolean): String {
         return when (id) {
-            Id.SANDBOX -> if (zh) SANDBOX_UBUNTU_ZH else SANDBOX_UBUNTU
+            Id.SANDBOX -> if (zh) SANDBOX_ALPINE_ZH else SANDBOX_ALPINE
             Id.ANDROID_CLI -> if (zh) ANDROID_CLI_ZH else ANDROID_CLI
-            Id.FILES -> if (zh) FILES_ZH else FILES
-            Id.COLLAB -> if (zh) COLLAB_ZH else COLLAB
+            Id.MINIS_CLI -> if (zh) MINIS_CLI_ZH else MINIS_CLI
         }
     }
 
@@ -96,65 +94,34 @@ object PromptSections {
     private fun prefs(context: Context) =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-    // ── Sandbox contract (per distro, per language) ──────────────────────────
+    // ── Sandbox contract (Alpine, per language) ───────────────────────────────
 
-private val SANDBOX_UBUNTU = """
-        |Distro: Ubuntu 24.04 LTS (glibc, aarch64, PRoot). Package manager: `apt-get`.
-        |- Install packages with `apt-get install -y X`; remove with `apt-get remove -y X`;
-        |  search with `apt-cache search X`.
-        |- bash, git, curl, wget, rg, python3, jq and ca-certificates are preinstalled;
-        |  `python3-NAME` is the native package for a Python module.
-        |- pip is PEP 668 managed: a bare `pip install X` fails with
-        |  "externally-managed-environment". Use `pip install --break-system-packages X`, or a
-        |  venv (`python3 -m venv /tmp/v && . /tmp/v/bin/activate`) for anything bigger.
-        |- Java: `apt-get install -y openjdk-17-jdk`.
+    private val SANDBOX_ALPINE = """
+        |Distro: Alpine Linux (musl libc, aarch64, PRoot). Package manager: `apk`.
+        |- Install packages with `apk add X`; remove with `apk del X`; search with `apk search X`.
+        |- bash, git, curl, wget, rg, python3 and jq may need installing first: run
+        |  `which <cmd>` before using one.
+        |- PyPI wheels for musllinux_aarch64 are rare, so native packages are preferred:
+        |  `apk search py3-<name>` then `apk add py3-numpy py3-pandas py3-matplotlib
+        |  py3-pillow py3-scipy py3-requests py3-yaml`. Only fall back to `pip install`
+        |  for pure-Python packages.
+        |- Java: `apk add openjdk21-jdk` (or openjdk17-jdk / openjdk11-jdk).
         |- For matplotlib always call `matplotlib.use('Agg')` before importing pyplot — no display.
         |- ICMP is blocked: `ping` hangs forever. Test connectivity with curl/wget.
         |- Prefer `rg` for every file search; never grep/awk/sed/find.
     """.trimMargin()
 
-private val SANDBOX_UBUNTU_ZH = """
-        |发行版：Ubuntu 24.04 LTS（glibc，aarch64，PRoot）。包管理器：`apt-get`。
-        |- 安装软件用 `apt-get install -y X`，卸载用 `apt-get remove -y X`，
-        |  搜索用 `apt-cache search X`。
-        |- 已预装 bash、git、curl、wget、rg、python3、jq、ca-certificates；
-        |  Python 模块对应的包名是 `python3-名称`。
-        |- pip 受 PEP 668 限制，直接 `pip install X` 会报 externally-managed-environment。
-        |  用 `pip install --break-system-packages X`，规模大的装到 venv：
-        |  `python3 -m venv /tmp/v && . /tmp/v/bin/activate`。
-        |- Java：`apt-get install -y openjdk-17-jdk`。
+    private val SANDBOX_ALPINE_ZH = """
+        |发行版：Alpine Linux（musl libc，aarch64，PRoot）。包管理器：`apk`。
+        |- 安装软件用 `apk add X`，卸载用 `apk del X`，搜索用 `apk search X`。
+        |- bash、git、curl、wget、rg、python3、jq 可能未预装，用前先 `which <命令>` 确认。
+        |- PyPI 上的 musllinux_aarch64 wheel 很少，优先用系统包：
+        |  先 `apk search py3-名称`，再 `apk add py3-numpy py3-pandas py3-matplotlib
+        |  py3-pillow py3-scipy py3-requests py3-yaml`。只有纯 Python 包才用 `pip install`。
+        |- Java：`apk add openjdk21-jdk`（或 openjdk17-jdk / openjdk11-jdk）。
         |- 用 matplotlib 时先调用 `matplotlib.use('Agg')`：没有显示服务。
         |- ICMP 被禁用，`ping` 会一直挂住。测试网络用 curl/wget。
         |- 文件搜索一律用 `rg`，不要用 grep/awk/sed/find。
-    """.trimMargin()
-
-    // ── Files & collaboration ────────────────────────────────────────────────
-
-    private val FILES = """
-        |Paths: /var/minis/{workspace,attachments,shared,offloads,memory}. Drafts go to
-        |workspace/, deliverables to shared/<project>/, archives never compress. Link files as
-        |minis:// URLs (percent-encoded); show images/audio/video inline with ![]().
-        |Read with offset/lines instead of loading whole files; scan with `rg -n`. Keep writes
-        |under ~500 chars per call — bigger content goes to a script that emits the file.
-    """.trimMargin()
-
-    private val FILES_ZH = """
-        |路径约定：/var/minis/{workspace,attachments,shared,offloads,memory}。草稿放
-        |workspace/，交付物放 shared/<项目>/，归档不压缩。文件用 minis:// 链接（需百分号编码）；
-        |图片/音频/视频用 ![]() 内嵌。
-        |读文件带 offset/lines，不要整篇灌入；扫描用 `rg -n`。单次写入控制在 500 字符内，
-        |长内容写脚本生成文件。
-    """.trimMargin()
-
-    private val COLLAB = """
-        |Report results, not process: no change logs, no version numbers, no intermediate
-        |artifacts. Diagrams as mermaid. Verify before delivering — never invent data; refresh
-        |stale numbers you notice. When a task fails, state the real error and what you tried.
-    """.trimMargin()
-
-    private val COLLAB_ZH = """
-        |只交付结果，不写变更史、版本号、中间产物；图用 mermaid。
-        |交付前自查：不编造数据，发现旧数据主动更新。失败时说明真实报错和已尝试的做法。
     """.trimMargin()
 
     // ── Android CLI section (toggleable, bilingual) ──────────────────────────
@@ -165,11 +132,29 @@ private val SANDBOX_UBUNTU_ZH = """
         |permission_denied — report it and point at settings, don't retry blindly.
         |- android-alarm (Clock alarms/timers), android-calendar (list/create events),
         |  android-clipboard (get/set), android-contacts (list/search/get/delete),
-        |- android-device (model/battery/storage), android-location (current/geocode),
-        |  android-notification (send/list/clear), android-photos (list/near), android-weather <lat> <lon>,
+        |  android-device (model/battery/storage), android-location (current/geocode),
+        |  android-notification (send/list/clear), android-photos (list/near),
+        |  android-weather <lat> <lon>,
         |- android-open <url> (system handler), android-speak (TTS), android-speech (STT),
         |  android-player (audio sessions), android-shizuku-cli (privileged APIs / exec),
-        |  android-a11y-cli (read screen, tap, type, swipe via AccessibilityService),
+        |  android-a11y-cli (read screen, tap, type, swipe via AccessibilityService).
+    """.trimMargin()
+
+    private val ANDROID_CLI_ZH = """
+        |Android 命令（用 shell_execute 调用，都在 /usr/local/bin，输出 JSON，`--help` 看详情）。
+        |需要 Shizuku/无障碍权限的会返回 permission_denied：如实说明并指向设置页，不要盲目重试。
+        |- android-alarm（时钟闹钟/计时器）、android-calendar（查/建日程）、
+        |  android-clipboard（读写剪贴板）、android-contacts（列/搜/取/删联系人）、
+        |  android-device（机型/电量/存储）、android-location（定位/逆地理/正地理）、
+        |  android-notification（发/列/清通知）、android-photos（相册/附近照片）、
+        |  android-weather <纬度> <经度>（Open-Meteo 天气）、
+        |- android-open <url>（交给系统处理）、android-speak（TTS 朗读）、android-speech（语音识别）、
+        |  android-player（音频播放会话）、android-shizuku-cli（特权 API/exec）、
+        |  android-a11y-cli（读屏、点击、输入、滑动）。
+    """.trimMargin()
+
+    private val MINIS_CLI = """
+        |Minis commands (same /usr/local/bin, same JSON output):
         |- minis-open <path|url> (preview inside the app, preferred over android-open),
         |  minis-sessions-cli (search/read chat history), minis-model-use (other models),
         |  minis-config (settings read/write), minis-scheduled (scheduled tasks),
@@ -182,20 +167,12 @@ private val SANDBOX_UBUNTU_ZH = """
         |minis-scheduled follow-up, or say the result arrives on the next message.
     """.trimMargin()
 
-    private val ANDROID_CLI_ZH = """
-        |Android 命令（用 shell_execute 调用，都在 /usr/local/bin，输出 JSON，`--help` 看详情）。
-        |需要 Shizuku/无障碍权限的会返回 permission_denied：如实说明并指向设置页，不要盲目重试。
-        |- android-alarm（时钟闹钟/计时器）、android-calendar（查/建日程）、
-        |  android-clipboard（读写剪贴板）、android-contacts（列/搜/取/删联系人）、
-        |- android-device（机型/电量/存储）、android-location（定位/逆地理/正地理）、
-        |  android-notification（发/列/清通知）、android-photos（相册/附近照片）、
-        |  android-weather <纬度> <经度>（Open-Meteo 天气）、
-        |- android-open <url>（交给系统处理）、android-speak（TTS 朗读）、android-speech（语音识别）、
-        |  android-player（音频播放会话）、android-shizuku-cli（特权 API/exec）、
-        |  android-a11y-cli（读屏、点击、输入、滑动）、
+    private val MINIS_CLI_ZH = """
+        |Minis 命令（同上，都在 /usr/local/bin，输出 JSON）：
         |- minis-open <路径|url>（App 内预览，优先于 android-open）、
         |  minis-sessions-cli（检索/读取历史会话）、minis-model-use（调用其他模型）、
         |  minis-config（读写设置）、minis-scheduled（定时任务）。
+        |  minis-open_terminal 是深链，仅用于需要交互输入的场景。
         |环境变量：绝不输出其值；缺哪个就告诉用户，并给
         |[设置 NAME](minis://settings/environments?create_key=NAME&create_value=) 链接。
         |定时：crontab/nohup 在 App 被挂起后会停，用 `minis-scheduled create`（走系统闹钟）

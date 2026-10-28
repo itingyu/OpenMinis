@@ -127,7 +127,7 @@ internal fun toolAccentColorInt(toolName: String?): Int = when (toolName) {
  * several sessions edit concurrently; the vocabulary here is small and stable.
  */
 internal fun friendlyToolTitleFor(toolName: String?): String = when (toolName) {
-    null, "" -> "Minis"
+    null, "" -> "Kite"
     "shell_execute" -> "Execute Shell"
     "file_read" -> "Read File"
     "file_write" -> "Write File"
@@ -163,16 +163,16 @@ internal fun toolDisplayName(toolName: String): String = when (toolName) {
  * Mirrors iOS ToolLiveSheet.toolTitle so the wording matches per tool.
  */
 internal fun toolTitleLabel(toolName: String): String = when (toolName) {
-    "shell_execute" -> "Minis is using Shell"
-    "file_read" -> "Minis is reading File"
-    "file_write" -> "Minis is using Editor"
-    "file_edit" -> "Minis is editing File"
-    "browser_use" -> "Minis is using Browser"
-    "read_image" -> "Minis is reading Image"
-    "memory_write", "memory_get" -> "Minis is using Memory"
-    "web_search" -> "Minis is using Search"
-    "subagent_task", "delegate_task", "agent_status" -> "Minis is using an Agent"
-    else -> "Minis is using ${toolDisplayName(toolName)}"
+    "shell_execute" -> "Kite is using Shell"
+    "file_read" -> "Kite is reading File"
+    "file_write" -> "Kite is using Editor"
+    "file_edit" -> "Kite is editing File"
+    "browser_use" -> "Kite is using Browser"
+    "read_image" -> "Kite is reading Image"
+    "memory_write", "memory_get" -> "Kite is using Memory"
+    "web_search" -> "Kite is using Search"
+    "subagent_task", "delegate_task", "agent_status" -> "Kite is using an Agent"
+    else -> "Kite is using ${toolDisplayName(toolName)}"
 }
 
 // Helper: format duration (iOS: < 1s → "0.1s", < 60s → "45s", >= 60s → "2m 10s")

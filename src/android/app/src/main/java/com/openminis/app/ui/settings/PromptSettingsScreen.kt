@@ -24,14 +24,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.openminis.app.agent.PromptSections
-import com.openminis.app.sandbox.RootfsFlavorPrefs
 
 /**
  * [T-prompt-sections] Every block of the system prompt the user is allowed to
  * rewrite, plus a language switch covering all of them at once.
  *
  * The distro-specific sandbox text follows the rootfs flavour, so the preview
- * below changes when the user switches Alpine / Ubuntu / Kali.
+ * below is shared by every sandbox; it is not tied to one distro.
  */
 @Composable
 fun PromptSettingsScreen(onBack: () -> Unit) {
@@ -42,7 +41,6 @@ fun PromptSettingsScreen(onBack: () -> Unit) {
 
     val lang = remember(version) { PromptSections.lang(context) }
     val zh = remember(version, lang) { PromptSections.useChinese(context) }
-    val flavorLabel = remember(version) { RootfsFlavorPrefs.current(context).label }
 
     // [T-prompt-flash-fix] SettingsScaffold already wraps its content in a
     // verticalScroll (scrollable = true). Nesting another verticalScroll here
@@ -73,7 +71,6 @@ fun PromptSettingsScreen(onBack: () -> Unit) {
                 context = context,
                 version = version,
                 zh = zh,
-                flavorLabel = flavorLabel,
                 onEdit = { id -> editing = id; draft = PromptSections.text(context, id, zh) },
                 onChange = { version++ },
             )
@@ -123,14 +120,13 @@ private fun SectionsList(
     context: android.content.Context,
     version: Int,
     zh: Boolean,
-    flavorLabel: String,
     onEdit: (PromptSections.Id) -> Unit,
     onChange: () -> Unit,
 ) {
     @Suppress("UNUSED_EXPRESSION") version
     SectionBox(
         title = "段落",
-        footer = "当前沙箱：$flavorLabel。关闭的段落不会进入系统提示词，模型看不到其中任何内容。",
+        footer = "关闭的段落不会进入系统提示词，模型看不到其中任何内容。",
     ) {
         PromptSections.Id.entries.forEachIndexed { i, id ->
             val enabled = PromptSections.isEnabled(context, id)

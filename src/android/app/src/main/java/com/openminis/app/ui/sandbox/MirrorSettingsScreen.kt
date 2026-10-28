@@ -84,28 +84,24 @@ enum class MirrorCategory(
     val displayName: String,
     val configPath: String,
 ) {
-    UBUNTU_APT("ubuntu_apt", "Ubuntu APT", "etc/apt/sources.list"),
+    ALPINE("alpine", "Alpine APK", "etc/apk/repositories"),
     PIP("pip", "Python pip", "etc/pip/pip.conf"),
     NPM("npm", "Node.js npm", "root/.npmrc");
 
     val icon: ImageVector
         get() = when (this) {
-            UBUNTU_APT -> Icons.Filled.Bolt
+            ALPINE -> Icons.Filled.Terrain
             PIP -> Icons.Filled.Inventory2
             NPM -> Icons.Outlined.Javascript
         }
 
     val iconColor: Color
         get() = when (this) {
-            UBUNTU_APT -> Color(0xFFE95420)
+            ALPINE -> Color(0xFF007AFF)
             PIP -> Color(0xFF34C759)
             NPM -> Color(0xFFFF3B30)
         }
 }
-
-/** Categories that belong to [flavor]; a single distro ships, so all of them. */
-private fun categoriesFor(flavor: com.openminis.app.sandbox.RootfsFlavor): List<MirrorCategory> =
-    MirrorCategory.entries
 
 data class MirrorEntry(
     val id: String,
@@ -128,15 +124,10 @@ data class MirrorTestResult(
 // ─── Mirror Definitions ──────────────────────────────────────────────────────
 
 object MirrorCatalog {
+    private const val ALPINE_PROBE = "v3.21/main/aarch64/APKINDEX.tar.gz"
 
-    /** [T-kali-mirrors] Small Release files: ~1 KB, still proves apt works. */
-    private const val UBUNTU_PROBE = "dists/noble/Release"
-
-
-    /** [T-kali-mirrors] Ubuntu arm64 lives on ubuntu-ports, not archive.ubuntu.com. */
-    private fun ubuntu(id: String, name: String, url: String, region: String, official: Boolean = false) =
-        MirrorEntry("ubuntu.$id", name, url, url + UBUNTU_PROBE, MirrorCategory.UBUNTU_APT, region, official)
-
+    private fun alpine(id: String, name: String, url: String, region: String, official: Boolean = false) =
+        MirrorEntry("alpine.$id", name, url, url + ALPINE_PROBE, MirrorCategory.ALPINE, region, official)
 
     private fun pip(id: String, name: String, url: String, region: String, official: Boolean = false) =
         MirrorEntry("pip.$id", name, url, url, MirrorCategory.PIP, region, official)
@@ -144,13 +135,17 @@ object MirrorCatalog {
     private fun npm(id: String, name: String, url: String, region: String, official: Boolean = false) =
         MirrorEntry("npm.$id", name, url, url, MirrorCategory.NPM, region, official)
 
-    val ubuntuMirrors = listOf(
-        ubuntu("official", "Official ports", "http://ports.ubuntu.com/ubuntu-ports/", "Global", official = true),
-        ubuntu("tuna", "Tsinghua TUNA", "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/", "China"),
-        ubuntu("aliyun", "Alibaba", "https://mirrors.aliyun.com/ubuntu-ports/", "China"),
-        ubuntu("ustc", "USTC", "https://mirrors.ustc.edu.cn/ubuntu-ports/", "China"),
-        ubuntu("huawei", "Huawei", "https://repo.huaweicloud.com/ubuntu-ports/", "China"),
-        ubuntu("tencent", "Tencent", "https://mirrors.cloud.tencent.com/ubuntu-ports/", "China"),
+    val alpineMirrors = listOf(
+        alpine("official", "Official CDN", "https://dl-cdn.alpinelinux.org/alpine/", "Global", official = true),
+        alpine("tuna", "Tsinghua TUNA", "https://mirrors.tuna.tsinghua.edu.cn/alpine/", "China"),
+        alpine("aliyun", "Alibaba", "https://mirrors.aliyun.com/alpine/", "China"),
+        alpine("ustc", "USTC", "https://mirrors.ustc.edu.cn/alpine/", "China"),
+        alpine("huawei", "Huawei", "https://repo.huaweicloud.com/alpine/", "China"),
+        alpine("tencent", "Tencent", "https://mirrors.cloud.tencent.com/alpine/", "China"),
+        alpine("leaseweb", "LEASEWEB UK", "https://mirror.leaseweb.com/alpine/", "Europe"),
+        alpine("rwth", "RWTH Germany", "https://ftp.halifax.rwth-aachen.de/alpine/", "Europe"),
+        alpine("jaist", "JAIST Japan", "https://ftp.jaist.ac.jp/pub/Linux/alpine/", "Asia"),
+        alpine("kakao", "Kakao Korea", "https://mirror.kakao.com/alpine/", "Asia"),
     )
 
     val pipMirrors = listOf(
@@ -169,11 +164,10 @@ object MirrorCatalog {
         npm("tencent", "Tencent", "https://mirrors.cloud.tencent.com/npm/", "China"),
     )
 
-    val allMirrors: List<MirrorEntry> =
-        ubuntuMirrors + pipMirrors + npmMirrors
+    val allMirrors: List<MirrorEntry> = alpineMirrors + pipMirrors + npmMirrors
 
     fun mirrors(category: MirrorCategory): List<MirrorEntry> = when (category) {
-        MirrorCategory.UBUNTU_APT -> ubuntuMirrors
+        MirrorCategory.ALPINE -> alpineMirrors
         MirrorCategory.PIP -> pipMirrors
         MirrorCategory.NPM -> npmMirrors
     }
@@ -223,7 +217,7 @@ object MirrorSpeedTestViewModel {
         synchronized(this) {
             if (loaded) return
             val p = prefs(context)
-            for (cat in activeCategories(context)) {
+            for (cat in MirrorCategory.entries) {
                 val savedUrl = p.getString("mirror.selected.${cat.key}", null)
                 if (savedUrl != null) {
                     val entry = MirrorCatalog.findByBaseURL(savedUrl)
@@ -280,7 +274,7 @@ object MirrorSpeedTestViewModel {
                 results.putAll(sorted)
 
                 // Auto-select fastest for categories without prior selection
-                for (cat in activeCategories(context)) {
+                for (cat in MirrorCategory.entries) {
                     if (selectedMirrorId[cat] == null) {
                         val fastest = sorted[cat]?.firstOrNull { it.isSuccess }
                         if (fastest != null) {
@@ -380,15 +374,9 @@ object MirrorSpeedTestViewModel {
      * boot — the overlay ships stock config files that would otherwise wipe
      * user-chosen mirrors.
      */
-    /** [T-kali-mirrors] Categories that belong to the installed distro. */
-    private fun activeCategories(context: Context): List<MirrorCategory> =
-        categoriesFor(
-            com.openminis.app.sandbox.RootfsFlavorPrefs.current(context.applicationContext),
-        )
-
     fun applyAllActiveMirrors(context: Context) {
         ensureLoaded(context)
-        for (category in activeCategories(context)) {
+        for (category in MirrorCategory.entries) {
             if (useCustomMirror[category] == true && selectedMirrorId[category] != null) {
                 applyMirror(context, category)
             }
@@ -412,7 +400,7 @@ object MirrorSpeedTestViewModel {
             runAllTests(context)
             currentJob?.join()
             withContext(Dispatchers.Main) {
-                for (cat in activeCategories(context)) {
+                for (cat in MirrorCategory.entries) {
                     val fastest = results[cat]?.firstOrNull { it.isSuccess } ?: continue
                     if (fastest.mirror.isOfficial) continue
                     selectedMirrorId[cat] = fastest.mirror.id
@@ -436,13 +424,8 @@ object MirrorSpeedTestViewModel {
     fun isActive(category: MirrorCategory): Boolean =
         useCustomMirror[category] == true && selectedMirrorId[category] != null
 
-    /**
-     * [T-kali-mirrors] Follow whatever distro is installed. Hard-coding
-     * "alpine-rootfs" meant every apt/pip/npm change after switching to Ubuntu
-     * was written into the Alpine tree and silently did nothing.
-     */
     private fun rootfsDataDir(context: Context): File =
-        com.openminis.app.sandbox.RootfsManager.getInstance(context.applicationContext).rootfsDir
+        File(context.applicationContext.filesDir, "alpine-rootfs")
 
     private fun applyMirror(context: Context, category: MirrorCategory) {
         val mirror = selectedMirror(category) ?: return
@@ -460,6 +443,8 @@ object MirrorSpeedTestViewModel {
         }
 
         val content = when (category) {
+            MirrorCategory.ALPINE ->
+                "${mirror.baseURL}v3.21/main\n${mirror.baseURL}v3.21/community\n"
             MirrorCategory.PIP -> {
                 val host = try { URI(mirror.baseURL).host ?: "" } catch (_: Exception) { "" }
                 """
@@ -471,17 +456,6 @@ object MirrorSpeedTestViewModel {
                 """.trimIndent()
             }
             MirrorCategory.NPM -> "registry=${mirror.baseURL}\n"
-            // [T-kali-mirrors] plain sources.list: deb822 (.sources) is what
-            // 24.04 ships with, and a second file there would win over this.
-            MirrorCategory.UBUNTU_APT -> buildString {
-                val base = mirror.baseURL.trimEnd('/') + "/"
-                appendLine("# Managed by Minis — ${mirror.name}")
-                for (suite in listOf("noble", "noble-updates", "noble-security")) {
-                    appendLine(
-                        "deb $base$suite main restricted universe multiverse",
-                    )
-                }
-            }
         }
 
         try {
@@ -546,8 +520,7 @@ fun MirrorsSectionView(onNavigate: (MirrorCategory) -> Unit) {
         )
     }
 
-    val installedFlavor = com.openminis.app.sandbox.RootfsFlavorPrefs.current(context)
-    for (category in categoriesFor(installedFlavor)) {
+    for (category in MirrorCategory.entries) {
         HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
         MirrorCategoryRow(category = category, onClick = { onNavigate(category) })
     }

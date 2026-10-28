@@ -2511,9 +2511,6 @@ class ChatViewModel(
                 providerRepository, context,
             ),
             memoryEnabled = _memoryEnabled.value,
-            // [T-ubuntu-rootfs] Keep the schema honest about the distro the
-            // shell actually runs in.
-            sandboxLabel = com.openminis.app.sandbox.RootfsFlavorPrefs.current(context).label,
             disabledTools = com.openminis.app.tools.ToolToggleStore.disabledNames(context),
             isHelper = isHelper,
             delegateEnabled = com.openminis.app.tools.AgentToolSwitch.AGENTS.isEnabled(context),

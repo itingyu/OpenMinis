@@ -35,8 +35,6 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.RadioButton
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -69,40 +67,11 @@ fun RootfsManagementScreen(
     val state by viewModel.uiState.collectAsState()
     val context = LocalContext.current
 
-    var currentFlavor by remember {
-        mutableStateOf(com.openminis.app.sandbox.RootfsFlavorPrefs.current(context))
-    }
-    var pendingFlavor by remember { mutableStateOf<com.openminis.app.sandbox.RootfsFlavor?>(null) }
     var showResetDialog by remember { mutableStateOf(false) }
     var showResetBackupDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         viewModel.refresh(context)
-    }
-
-    // [T-ubuntu-rootfs] Confirm before pulling ~30 MB out of the APK and
-    // wiping nothing — both trees coexist, so this is safe but slow.
-    pendingFlavor?.let { f ->
-        AlertDialog(
-            onDismissRequest = { pendingFlavor = null },
-            title = { Text("切换到 ${f.label}？") },
-            text = {
-                Text(
-                    "首次切换需要解压 rootfs" +
-                        "，随后首次启动会联网安装基础软件包（bash/git/python3 等，约 3-10 分钟）。"
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    pendingFlavor = null
-                    viewModel.switchFlavor(context, f)
-                    currentFlavor = f
-                }) { Text("切换") }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingFlavor = null }) { Text(stringResource(R.string.common_cancel)) }
-            },
-        )
     }
 
     // T168: iOS-style inset-grouped background. surfaceContainerLowest sits
@@ -131,35 +100,6 @@ fun RootfsManagementScreen(
                 .verticalScroll(rememberScrollState()),
         ) {
             Spacer(modifier = Modifier.height(8.dp))
-
-            // --- Distro section ([T-ubuntu-rootfs]) ---
-            SettingsSection(title = "发行版") {
-                com.openminis.app.sandbox.RootfsFlavor.entries.forEach { f ->
-                    ListItem(
-                        headlineContent = { Text(f.label) },
-                        supportingContent = {
-                            Text("完整、glibc、可用 apt")
-                        },
-                        trailingContent = {
-                            RadioButton(
-                                selected = currentFlavor == f,
-                                onClick = {
-                                    if (currentFlavor != f && !state.isProcessing) {
-                                        pendingFlavor = f
-                                    }
-                                },
-                            )
-                        },
-                        colors = transparentListItemColors(),
-                        modifier = Modifier.clickable(enabled = !state.isProcessing) {
-                            if (currentFlavor != f) pendingFlavor = f
-                        },
-                    )
-                    if (f != com.openminis.app.sandbox.RootfsFlavor.entries.last()) {
-                        SettingsRowDivider()
-                    }
-                }
-            }
 
             // --- Status section ---
             SettingsSection(title = stringResource(R.string.rootfs_status_section)) {
