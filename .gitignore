@@ -164,3 +164,6 @@ src/android/app/libs/rclone.aar
 deps/aot/*.S
 deps/aot/.build/
 deps/aot/.build-iphonesimulator/
+
+# APK output (regenerable)
+/builds/
