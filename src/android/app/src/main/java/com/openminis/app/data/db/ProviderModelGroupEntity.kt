@@ -22,4 +22,10 @@ data class ProviderModelGroupEntity(
     @ColumnInfo(name = "last_context_limit_tokens") val lastContextLimitTokens: Int? = null,
     @ColumnInfo(name = "member_entry_ids_json") val memberEntryIdsJson: String,
     @ColumnInfo(name = "sort_order") val sortOrder: Int = 0,
+    /**
+     * [T-android-group-time-routing] Serialized `List<GroupTimeRule>` JSON.
+     * `"[]"` for every group that predates time routing, which is exactly the
+     * "no rules" value at runtime.
+     */
+    @ColumnInfo(name = "time_rules_json", defaultValue = "[]") val timeRulesJson: String = "[]",
 )

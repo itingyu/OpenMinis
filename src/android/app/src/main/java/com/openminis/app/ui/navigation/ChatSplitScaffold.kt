@@ -917,6 +917,9 @@ fun ChatSplitScaffoldRoute(
             }
         },
         listPane = { selectedSessionId, draftPlaceholderId, onSessionSelected ->
+            var homeTab by androidx.compose.runtime.saveable.rememberSaveable {
+                androidx.compose.runtime.mutableStateOf("sessions")
+            }
             com.openminis.app.ui.sessions.SessionListScreen(
                 chatRepository = chatRepository,
                 providerRepository = providerRepository,

@@ -42,6 +42,7 @@ import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import java.io.IOException
@@ -2131,6 +2132,187 @@ class OpenAIProvider private constructor(
         @Suppress("UNREACHABLE_CODE")
         throw LLMError.ProviderError("images/generations: unreachable")
     }
+
+    /**
+     * [T-android-video-generation] One text-to-video generation, end to end:
+     * submit → poll → download the MP4 bytes.
+     *
+     * Two submit shapes exist in the wild and the gateway rejects the wrong
+     * one outright, so the family decides (mirrors the 4sapi video notes):
+     *  - Wan (`wan3.0-video*`): POST `{base}/video/generations`, body carries
+     *    `duration` + `size` written with a `*` (1280*720, NOT 1280x720), task
+     *    state lives in `data.status` and is UPPERCASE.
+     *  - OpenAI-style (`veo*`, `omni*`, `sora*`): POST `{base}/videos`, body
+     *    carries `aspect_ratio` / `resolution`, state is top-level `status`
+     *    (lowercase), task id may be `id` or `data.taskId`.
+     *
+     * Download always goes through `{base}/videos/{id}/content`, which is the
+     * one endpoint both families share. When the gateway answers with JSON
+     * instead of bytes (some channels), the `result_url`/`data[0].url` in the
+     * poll response is used as a fallback.
+     *
+     * Blocking IO on Dispatchers.IO; polling stops as soon as the caller's
+     * coroutine is cancelled, which is what the screen's Cancel button does.
+     */
+    suspend fun generateVideo(
+        prompt: String,
+        videoModelId: String = model.id,
+        durationSeconds: Int = 4,
+        size: String = "1280*720",
+        aspectRatio: String? = null,
+        resolution: String? = null,
+        pollIntervalMs: Long = 15_000,
+        timeoutMs: Long = 900_000,
+        onProgress: ((status: String, progress: Int) -> Unit)? = null,
+        /** Re-attach to a task submitted by an earlier process instead of
+         *  submitting a new (billable) one. */
+        existingTaskId: String? = null,
+        /** Called once the gateway accepted the job, so the caller can persist
+         *  the id and resume polling after a process death. */
+        onSubmitted: ((taskId: String) -> Unit)? = null,
+        /** Optional first frame for image-to-video (`/v1/videos` families).
+         *  Wan's text-to-video endpoint rejects it, so callers must not pass it
+         *  there. */
+        firstImage: ByteArray? = null,
+    ): ByteArray = withContext(Dispatchers.IO) {
+        val token = getToken()
+        val wanStyle = videoModelId.contains("wan", ignoreCase = true)
+        val submitUrl = "$basePath" + if (wanStyle) "/video/generations" else "/videos"
+        val body = JSONObject()
+            .put("model", videoModelId)
+            .put("prompt", prompt)
+        if (wanStyle) {
+            body.put("duration", durationSeconds)
+            body.put("size", size)
+        } else {
+            body.put("duration", durationSeconds)
+            aspectRatio?.let { body.put("aspect_ratio", it) }
+            resolution?.let { body.put("resolution", it) }
+        }
+        if (firstImage != null && wanStyle) {
+            throw LLMError.ProviderError("Wan 文生视频端点不支持首帧，请改用 veo/omni 等 /videos 模型")
+        }
+        val payload: RequestBody = if (firstImage != null) {
+            // /v1/videos accepts multipart so the frame never needs a public
+            // URL; JSON-only callers get the text-to-video path above.
+            MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart("model", videoModelId)
+                .addFormDataPart("prompt", prompt)
+                .addFormDataPart("duration", durationSeconds.toString())
+                .apply {
+                    aspectRatio?.let { addFormDataPart("aspect_ratio", it) }
+                    resolution?.let { addFormDataPart("resolution", it) }
+                }
+                .addFormDataPart(
+                    "first_image",
+                    "first-frame.jpg",
+                    firstImage.toRequestBody("image/jpeg".toMediaType()),
+                )
+                .build()
+        } else {
+            body.toString().toRequestBody("application/json".toMediaType())
+        }
+        val submitBuilder = Request.Builder()
+            .url(submitUrl)
+            .post(payload)
+            .applyKeyAuth(token)
+
+        val taskId = if (existingTaskId.isNullOrBlank()) {
+        val submitted = client.newCall(submitBuilder.build()).execute().use { resp ->
+            val text = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) throw mapHttpError(resp.code, text)
+            runCatching { JSONObject(text) }.getOrElse {
+                throw LLMError.ProviderError("video submit returned non-JSON: ${it.message}")
+            }
+        }
+        if (!submitted.optBoolean("success", true)) {
+            val msg = submitted.optString("message").ifBlank { "video submit rejected" }
+            throw LLMError.ProviderError(msg)
+        }
+        submitted.optString("task_id").ifBlank {
+            submitted.optString("id").ifBlank {
+                submitted.optJSONObject("data")?.optString("taskId").orEmpty()
+            }
+        }.also { onSubmitted?.invoke(it) }
+        } else {
+            existingTaskId!!
+        }
+        if (taskId.isBlank()) {
+            throw LLMError.ProviderError("video submit returned no task id")
+        }
+
+        var elapsed = 0L
+        var status = "queued"
+        var progress = 0
+        while (elapsed < timeoutMs) {
+            delay(pollIntervalMs)
+            elapsed += pollIntervalMs
+            val statusUrl = "$basePath" + if (wanStyle) {
+                "/video/generations/$taskId"
+            } else {
+                "/videos/$taskId"
+            }
+            val polled = runCatching {
+                val b = Request.Builder().url(statusUrl).get().applyKeyAuth(token)
+                client.newCall(b.build()).execute().use { resp ->
+                    val text = resp.body?.string().orEmpty()
+                    if (!resp.isSuccessful) throw mapHttpError(resp.code, text)
+                    JSONObject(text)
+                }
+            }.getOrElse { e ->
+                // A single failed poll is not fatal: the task keeps running
+                // server-side, and gateways routinely 502 mid-render.
+                onProgress?.invoke("poll_error", progress)
+                null
+            } ?: continue
+
+            val data = polled.optJSONObject("data")
+            status = data?.optString("status").orEmpty()
+                .ifBlank { polled.optString("status") }
+                .ifBlank { status }
+            progress = data?.optInt("progress", progress) ?: polled.optInt("progress", progress)
+            onProgress?.invoke(status, progress)
+            when (status.uppercase()) {
+                "SUCCESS", "SUCCEEDED", "COMPLETED" -> {
+                    val fallbackUrl = data?.optString("result_url").orEmpty().ifBlank {
+                        polled.optJSONArray("data")?.optJSONObject(0)?.optString("url").orEmpty()
+                    }.ifBlank {
+                        polled.optString("result_url")
+                    }
+                    return@withContext downloadVideo(taskId, token, fallbackUrl)
+                }
+                "FAILURE", "FAILED", "ERROR", "CANCELLED" -> {
+                    val reason = data?.optString("fail_reason").orEmpty()
+                        .ifBlank { polled.optString("error").ifBlank { "video generation failed ($status)" } }
+                    throw LLMError.ProviderError(reason)
+                }
+            }
+        }
+        throw LLMError.ProviderError("video generation timed out after ${timeoutMs / 1000}s (last status: $status)")
+    }
+
+    /** Download the rendered MP4, falling back to the poll's URL when the
+     *  content endpoint answers with JSON instead of bytes. */
+    private suspend fun downloadVideo(taskId: String, token: String, fallbackUrl: String): ByteArray =
+        withContext(Dispatchers.IO) {
+            val contentUrl = "$basePath/videos/$taskId/content"
+            val b = Request.Builder().url(contentUrl).get().applyKeyAuth(token)
+            val result = client.newCall(b.build()).execute().use { resp ->
+                val bytes = resp.body?.bytes() ?: ByteArray(0)
+                // A JSON body here is an error/reference payload, not the file.
+                val looksJson = bytes.size < 4096 &&
+                    bytes.isNotEmpty() && bytes[0].toInt().toChar() == '{'
+                if (!resp.isSuccessful || looksJson) null else bytes
+            }
+            if (result != null && result.isNotEmpty()) return@withContext result
+            if (fallbackUrl.isBlank()) throw LLMError.ProviderError("video content download failed")
+            val fb = Request.Builder().url(fallbackUrl).get()
+            client.newCall(fb.build()).execute().use { resp ->
+                if (!resp.isSuccessful) throw mapHttpError(resp.code, "video download failed")
+                resp.body?.bytes() ?: ByteArray(0)
+            }
+        }
 
     /**
      * [T-android-image-edit-endpoint] Call `/images/edits` for image-to-image

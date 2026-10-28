@@ -163,8 +163,16 @@ object BackupProviderMerge {
         }
 
         // ── groups ──
-        val localGroups = local.modelGroups.map { it.copy(memberEntryIds = it.memberEntryIds.map(::localKey).toMutableList()) }
-        val remoteGroups = remote.modelGroups.map { it.copy(memberEntryIds = it.memberEntryIds.map(::remoteKey).toMutableList()) }
+        // [T-android-group-time-routing] Time-rule members are entry ids too:
+        // remap them with the same key function or a restored schedule points
+        // at ids that no longer exist on this device.
+        fun ModelGroup.remapped(f: (String) -> String) = copy(
+            memberEntryIds = memberEntryIds.map(f).toMutableList(),
+            timeRules = timeRules.map { rule -> rule.copy(entryIds = rule.entryIds.map(f)) }
+                .toMutableList(),
+        )
+        val localGroups = local.modelGroups.map { it.remapped(::localKey) }
+        val remoteGroups = remote.modelGroups.map { it.remapped(::remoteKey) }
         val localById = localGroups.associateBy { it.id }
         // Local groups an id match claims are not available to a name match.
         val claimed = remoteGroups.map { it.id }.filter { it in localById }.toMutableSet()

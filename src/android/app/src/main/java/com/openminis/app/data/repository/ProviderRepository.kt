@@ -1140,6 +1140,19 @@ class ProviderRepository(private val context: Context) {
     }
 
     /**
+     * [T-android-group-time-routing] The member order this group is using at
+     * [at] (default: now). A time rule that matches returns its own member
+     * list; otherwise the group's persisted order is returned unchanged, so
+     * groups without rules behave exactly as before.
+     *
+     * Every routing path that answers "which model serves the next request"
+     * must read this instead of `group.memberEntryIds` — otherwise a scheduled
+     * window would change what the picker shows but not what is sent.
+     */
+    fun activeMemberIds(group: ModelGroup, at: java.time.LocalDateTime = com.openminis.app.data.model.GroupTimeRouting.now()): List<String> =
+        com.openminis.app.data.model.GroupTimeRouting.activeMemberIds(group, at)
+
+    /**
      * [T-android-group-resolve-skip-uncredentialed] Members of [group] that are
      * actually usable RIGHT NOW: not hidden, provider enabled, and provider
      * holding a credential.
@@ -1156,7 +1169,7 @@ class ProviderRepository(private val context: Context) {
      */
     fun availableMemberEntries(group: ModelGroup): List<ModelEntry> {
         val config = _config.value
-        return group.memberEntryIds.mapNotNull { entryId ->
+        return activeMemberIds(group).mapNotNull { entryId ->
             val entry = config.modelEntries.find { it.id == entryId } ?: return@mapNotNull null
             if (entry.isHidden) return@mapNotNull null
             val instance = config.instances.find { it.id == entry.providerInstanceId }
@@ -1493,6 +1506,12 @@ class ProviderRepository(private val context: Context) {
         config.modelEntries.removeAll { it.id == entryId }
         config.modelGroups.forEach { group ->
             group.memberEntryIds.removeAll { it == entryId }
+            // [T-android-group-time-routing] A schedule that still lists the
+            // deleted entry would resolve to a subset of its own members.
+            group.timeRules = group.timeRules
+                .map { rule -> rule.copy(entryIds = rule.entryIds.filter { it != entryId }) }
+                .filter { rule -> rule.entryIds.isNotEmpty() }
+                .toMutableList()
         }
         // T171: cascade-clean the agent-loop direct-entry pin so the
         // AgentLoopModelsScreen never surfaces a checkmark on a model that
@@ -1522,6 +1541,7 @@ class ProviderRepository(private val context: Context) {
             // state back inside a working copy, quietly undoing the invariant.
             config.modelGroups[idx] = group.copy(
                 memberEntryIds = group.memberEntryIds.toMutableList(),
+                timeRules = group.timeRules.toMutableList(),
             )
             saveConfig(config)
         }
@@ -1776,7 +1796,7 @@ class ProviderRepository(private val context: Context) {
         // Then group members, in group order
         for (gid in config.agentLoopGroupIds) {
             val group = config.modelGroups.find { it.id == gid } ?: continue
-            for (memberId in group.memberEntryIds) {
+            for (memberId in activeMemberIds(group)) {
                 config.modelEntries.find { it.id == memberId }?.let(::consider)
             }
         }
@@ -1934,7 +1954,7 @@ class ProviderRepository(private val context: Context) {
 
         val gid = config.visionGroupId ?: return emptyList()
         val group = config.modelGroups.find { it.id == gid } ?: return emptyList()
-        var members = group.memberEntryIds.mapNotNull { providerEntry(it) }
+        var members = activeMemberIds(group).mapNotNull { providerEntry(it) }
         if (group.strategy == RoutingStrategy.loadBalance && members.size > 1) {
             val offset = kotlin.math.abs(loadBalanceSeed) % members.size
             members = members.drop(offset) + members.take(offset)
@@ -2172,7 +2192,7 @@ class ProviderRepository(private val context: Context) {
         val gid = config.voiceInputGroupId
         val group = gid?.let { g -> config.modelGroups.find { it.id == g } }
         if (group != null) {
-            for (memberId in group.memberEntryIds) {
+            for (memberId in activeMemberIds(group)) {
                 if (memberId.startsWith(SystemVoiceIds.BUILTIN_PROVIDER_ID)) return systemChoice(memberId)
                 providerEntry(memberId)?.let { return VoiceInputChoice(null, it) }
             }
@@ -2228,7 +2248,7 @@ class ProviderRepository(private val context: Context) {
         val gid = config.voiceInputGroupId
         val group = gid?.let { g -> config.modelGroups.find { it.id == g } }
         if (group != null) {
-            var members = group.memberEntryIds
+            var members = activeMemberIds(group)
                 .filter { !it.startsWith(SystemVoiceIds.BUILTIN_PROVIDER_ID) }
                 .mapNotNull { providerEntry(it) }
             if (group.strategy == RoutingStrategy.loadBalance && members.size > 1) {
@@ -2312,7 +2332,7 @@ class ProviderRepository(private val context: Context) {
         val gid = config.voiceOutputGroupId
         val group = gid?.let { g -> config.modelGroups.find { it.id == g } }
         if (group != null) {
-            for (memberId in group.memberEntryIds) {
+            for (memberId in activeMemberIds(group)) {
                 if (memberId.startsWith(SystemVoiceIds.BUILTIN_PROVIDER_ID)) {
                     return VoiceOutputChoice(isSystemEngine = true, entry = null)
                 }
@@ -2344,7 +2364,7 @@ class ProviderRepository(private val context: Context) {
         val config = _config.value
         val gid = if (output) config.voiceOutputGroupId else config.voiceInputGroupId
         val group = config.modelGroups.find { it.id == gid } ?: return null
-        for (memberId in group.memberEntryIds) {
+        for (memberId in activeMemberIds(group)) {
             // System sentinels are always usable — the on-device engine needs
             // no instance and is never disabled.
             if (memberId.startsWith(SystemVoiceIds.BUILTIN_PROVIDER_ID)) return memberId

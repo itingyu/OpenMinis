@@ -36,7 +36,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ProviderConfigMetaEntity::class,
         ProviderThinkingRuleEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = false,
 )
 abstract class ProviderDatabase : RoomDatabase() {
@@ -105,6 +105,20 @@ abstract class ProviderDatabase : RoomDatabase() {
         }
 
 
+        /**
+         * [T-android-group-time-routing] Add the model-group time-rule column.
+         * Pure additive TEXT ALTER with a non-null `'[]'` default, so every
+         * existing group reads back as "no rules" and routing stays identical
+         * until the user configures a window.
+         */
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE provider_model_groups ADD COLUMN time_rules_json TEXT NOT NULL DEFAULT '[]'",
+                )
+            }
+        }
+
         fun getInstance(context: Context): ProviderDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -112,7 +126,7 @@ abstract class ProviderDatabase : RoomDatabase() {
                     ProviderDatabase::class.java,
                     "provider.db",
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                     .build()
                     .also { INSTANCE = it }
             }

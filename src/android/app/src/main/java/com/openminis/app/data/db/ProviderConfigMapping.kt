@@ -1,6 +1,7 @@
 package com.openminis.app.data.db
 
 import com.openminis.app.data.model.FallbackStrategy
+import com.openminis.app.data.model.GroupTimeRule
 import com.openminis.app.data.model.ImageEndpointMode
 import com.openminis.app.data.model.LLMModel
 import com.openminis.app.data.model.ModelEntry
@@ -143,6 +144,12 @@ fun ProviderConfig.toSnapshot(
         // and the lookup paths in ProviderRepository compare by string
         // equality regardless of shape.
         val translatedMembers = g.memberEntryIds.map { idMap[it] ?: it }
+        // Time-rule members use the same composite ids as memberEntryIds, so
+        // they must be translated in lockstep or a migrated group loses its
+        // schedule's member references.
+        val translatedRules = g.timeRules.map { rule ->
+            rule.copy(entryIds = rule.entryIds.map { idMap[it] ?: it })
+        }
         ProviderModelGroupEntity(
             id = g.id,
             name = g.name,
@@ -156,6 +163,10 @@ fun ProviderConfig.toSnapshot(
                 translatedMembers,
             ),
             sortOrder = idx,
+            timeRulesJson = jsonForBlobs.encodeToString(
+                ListSerializer(GroupTimeRule.serializer()),
+                translatedRules,
+            ),
         )
     }
 
@@ -285,6 +296,12 @@ fun ProviderConfigSnapshot.toProviderConfig(jsonForBlobs: Json): ProviderConfig 
             defaultThinkingLevel = row.defaultThinkingLevel?.let { ThinkingLevel.decoded(it) },
             contextLimitTokens = row.contextLimitTokens,
             lastContextLimitTokens = row.lastContextLimitTokens,
+            timeRules = runCatching {
+                jsonForBlobs.decodeFromString(
+                    ListSerializer(GroupTimeRule.serializer()),
+                    row.timeRulesJson,
+                )
+            }.getOrDefault(emptyList()).toMutableList(),
         )
     }.toMutableList()
 

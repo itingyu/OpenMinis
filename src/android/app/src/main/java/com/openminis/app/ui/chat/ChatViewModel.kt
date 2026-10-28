@@ -7771,7 +7771,10 @@ class ChatViewModel(
             ?: return directEntryFallbackCandidates(primaryProvider)
         val config = providerRepository.config.value
         val group = config.modelGroups.find { it.id == groupId } ?: return emptyList()
-        val members = group.memberEntryIds
+        // [T-android-group-time-routing] Fallback stays inside the window that
+        // is active now: cycling onto a model the user deliberately excluded
+        // from this time slot would be a silent policy violation.
+        val members = providerRepository.activeMemberIds(group)
         // Find current provider's position in the group.
         // [T-android-fallback-entry-identity] Prefer the ACTIVE ENTRY id — the
         // model-id match below is ambiguous when two instances share a model id
@@ -7830,7 +7833,7 @@ class ChatViewModel(
         val config = providerRepository.config.value
         val group = config.modelGroups.find { it.id == groupId } ?: return emptyList()
         val result = mutableListOf<String>()
-        for (entryId in group.memberEntryIds) {
+        for (entryId in providerRepository.activeMemberIds(group)) {
             val entry = config.modelEntries.find { it.id == entryId } ?: continue
             val instance = config.instances.find { it.id == entry.providerInstanceId } ?: continue
             val label = instance.label.ifEmpty { entry.model.provider }
@@ -7870,7 +7873,7 @@ class ChatViewModel(
         val group = config.modelGroups.find { it.id == groupId } ?: return emptyList()
         val activeEntry = _activeEntryId.value
         val out = mutableListOf<FallbackCandidate>()
-        for (entryId in group.memberEntryIds) {
+        for (entryId in providerRepository.activeMemberIds(group)) {
             if (entryId == activeEntry) continue
             val entry = config.modelEntries.find { it.id == entryId } ?: continue
             if (entry.isHidden) continue
@@ -9446,6 +9449,41 @@ class ChatViewModel(
     }
 
     /**
+     * [T-android-group-time-routing] Switch the session onto the model its
+     * group schedules for RIGHT NOW, at the moment a turn starts.
+     *
+     * Why here and not only on session open: a chat left open across a window
+     * boundary (09:00 stays open until 18:00) would otherwise keep sending to
+     * the daytime model all evening, which is the exact case the feature
+     * exists for. Why not inside the agent loop: mid-turn switching would
+     * change the model between tool rounds of the SAME reply.
+     *
+     * Deliberately silent when nothing changes, and only acts when the current
+     * entry is outside the active window — an entry the user pinned inside the
+     * window keeps serving, so ordering preferences still work.
+     */
+    private fun applyTimeWindowRouting() {
+        if (_isStreaming.value) return
+        val groupId = _selectedGroupId.value ?: return
+        val group = providerRepository.group(groupId) ?: return
+        if (group.timeRules.isEmpty()) return
+        val active = providerRepository.activeMemberIds(group)
+        if (active.isEmpty()) return
+        val current = _activeEntryId.value
+        if (current != null && current in active) return
+        val switched = runCatching { resolveProviderFromGroup(groupId) }.getOrDefault(false)
+        if (switched) {
+            _activeEntryId.value?.let { entryId ->
+                persistBinding("""{"type":"group","groupId":"$groupId","lastEntryId":"$entryId"}""")
+            }
+            AppLogger.info(
+                TAG_STREAM,
+                "[time-rule] switched group=${group.name} to entry=${_activeEntryId.value?.take(8)}",
+            )
+        }
+    }
+
+    /**
      * [T-android-submit-outcome] What happened to a prompt handed to the send
      * funnel. The Android equivalent of iOS P0's `ProgrammaticSubmitOutcome`,
      * deliberately NOT a separate entry point: Android's funnel already checks
@@ -9510,6 +9548,9 @@ class ChatViewModel(
         // scheduled fire into an idle chat) reach this funnel without the
         // public sendMessage, and are new work too.
         com.openminis.app.agent.jobs.AgentJobRegistry.clearDelegationMute(activeSessionId)
+        // [T-android-group-time-routing] Headless sends (RPC, scheduled fires)
+        // go through this funnel too, so the window is honoured there as well.
+        applyTimeWindowRouting()
         // [T-headless-own-attachments] A prompt nobody typed (scheduled fire,
         // CLI / RPC, a sub agent's result or progress report, a steer nudge,
         // a deferred answer) neither reads nor clears the composer: its text

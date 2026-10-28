@@ -967,6 +967,7 @@ fun SessionListScreen(
     val scheduledBadgeCount = com.openminis.app.scheduled.ScheduledTaskStore
         .homeBadgeCount(scheduledTaskCount, showScheduledBadge)
 
+    
     Scaffold(
         topBar = {
             TopAppBar(
@@ -1121,6 +1122,8 @@ fun SessionListScreen(
         },
         // No default FAB — we draw dual FABs manually at bottom
     ) { padding ->
+        // [T-android-media-generation] Generation history as a full-screen layer.
+        // A Dialog lives in its own window, so no gesture layer can swallow it.
         Box(
             modifier = Modifier
                 .fillMaxSize()

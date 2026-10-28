@@ -214,6 +214,7 @@ object Routes {
     fun sharedFoldersDetail(folderId: String) = "shared_folders_detail/$folderId"
     /** [T-android-scheduled-tasks-design] Scheduled tasks list + editor. */
     const val SCHEDULED_TASKS = "scheduled_tasks"
+    /** [T-android-media-generation] In-app image / video generation. */
     const val SCHEDULED_TASK_EDIT = "scheduled_tasks/edit?taskId={taskId}"
     fun scheduledTaskEdit(taskId: String? = null): String =
         if (taskId == null) "scheduled_tasks/edit" else "scheduled_tasks/edit?taskId=$taskId"
@@ -1608,7 +1609,6 @@ fun AppNavigation(
             )
         }
 
-        // [T-android-scheduled-tasks-design] Scheduled tasks list + editor.
         composable(Routes.SCHEDULED_TASKS) {
             com.openminis.app.ui.scheduled.ScheduledTasksScreen(
                 onBack = { navController.safePopBackStack() },

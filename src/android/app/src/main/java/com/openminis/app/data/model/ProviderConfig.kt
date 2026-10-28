@@ -265,6 +265,10 @@ data class ModelGroup(
     // restores the previous value instead of snapping back to 128K. Default
     // null lets old JSON deserialize cleanly (kotlinx.serialization).
     var lastContextLimitTokens: Int? = null,
+    // [T-android-group-time-routing] Time-of-day member selection. Empty (the
+    // default) keeps the group's plain memberEntryIds order, so pre-existing
+    // configs and older builds round-trip unchanged.
+    var timeRules: MutableList<GroupTimeRule> = mutableListOf(),
 )
 
 @Serializable

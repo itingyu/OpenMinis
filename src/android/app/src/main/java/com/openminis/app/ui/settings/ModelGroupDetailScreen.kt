@@ -1,5 +1,7 @@
 package com.openminis.app.ui.settings
 
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,6 +14,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -24,9 +28,11 @@ import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
@@ -60,6 +66,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.graphics.Color
 import com.openminis.app.data.model.FallbackStrategy
+import com.openminis.app.data.model.GroupTimeRule
 import com.openminis.app.data.model.RoutingStrategy
 import com.openminis.app.data.model.ThinkingLevel
 import com.openminis.app.provider.effectiveMaxThinkingLevel
@@ -123,6 +130,9 @@ fun ModelGroupDetailScreen(
     // Local copy of member IDs for live reorder
     var memberIds by remember(group.memberEntryIds) { mutableStateOf(group.memberEntryIds.toList()) }
     var entryToRemove by remember { mutableStateOf<String?>(null) }
+    // [T-android-group-time-routing] Rule editor: null initial = new rule.
+    var ruleEditor by remember { mutableStateOf<GroupTimeRule?>(null) }
+    var ruleEditorOpen by remember { mutableStateOf(false) }
     // [T-quota-group-member-pill] Provider whose quota sheet is open.
     var quotaSheetInstanceId by remember { mutableStateOf<String?>(null) }
 
@@ -246,6 +256,75 @@ fun ModelGroupDetailScreen(
                             },
                             showDivider = false,
                         )
+                    }
+                }
+            }
+
+            // ── Time-based routing [T-android-group-time-routing] ──────
+            item {
+                SettingsSection(
+                    header = "时段路由",
+                    footer = "按中国标准时间（CST, UTC+8）生效。自上而下第一个匹配的时段决定本组用哪些模型；" +
+                        "都没命中时按上面的成员顺序。时段内指定的模型顺序即该时段的优先级。",
+                ) {
+                    SettingsCardBlock {
+                        if (group.timeRules.isEmpty()) {
+                            Text(
+                                text = "未设置时段：始终使用上面的成员顺序。",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                            )
+                        }
+                        group.timeRules.forEachIndexed { index, rule ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = rule.name.ifBlank { "时段 ${index + 1}" },
+                                        style = MaterialTheme.typography.bodyLarge,
+                                    )
+                                    Text(
+                                        text = "${rule.dayLabel()} ${rule.windowLabel()} · ${rule.entryIds.size} 个模型",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                MinisTextButton(onClick = {
+                                    ruleEditor = rule
+                                    ruleEditorOpen = true
+                                }) { Text("编辑") }
+                                IconButton(onClick = {
+                                    providerRepository.updateGroup(
+                                        group.copy(
+                                            timeRules = group.timeRules.filter { it.id != rule.id }
+                                                .toMutableList(),
+                                        ),
+                                    )
+                                }) {
+                                    Icon(
+                                        Icons.Filled.Delete,
+                                        contentDescription = "删除时段",
+                                        tint = MaterialTheme.colorScheme.error,
+                                    )
+                                }
+                            }
+                        }
+                        MinisButton(
+                            onClick = {
+                                ruleEditor = null
+                                ruleEditorOpen = true
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                        ) {
+                            Text("添加时段")
+                        }
                     }
                 }
             }
@@ -631,6 +710,26 @@ fun ModelGroupDetailScreen(
         com.openminis.app.ui.quota.QuotaDetailSheet(instanceId = id, onDismiss = { quotaSheetInstanceId = null }, halfHeight = false)
     }
 
+    // [T-android-group-time-routing] Add / edit one time window.
+    if (ruleEditorOpen) {
+        TimeRuleEditorDialog(
+            initial = ruleEditor,
+            memberIds = group.memberEntryIds,
+            labelOf = { id -> config.modelEntries.find { it.id == id }?.model?.displayName ?: id },
+            onDismiss = { ruleEditorOpen = false },
+            onSave = { rule ->
+                val existing = group.timeRules
+                val next = if (existing.any { it.id == rule.id }) {
+                    existing.map { if (it.id == rule.id) rule else it }
+                } else {
+                    existing + rule
+                }
+                providerRepository.updateGroup(group.copy(timeRules = next.toMutableList()))
+                ruleEditorOpen = false
+            },
+        )
+    }
+
     // Confirm remove model from group
     if (entryToRemove != null) {
         val removingId = entryToRemove!!
@@ -707,6 +806,123 @@ fun ModelGroupDetailScreen(
 private const val CONTEXT_LIMIT_UNLIMITED_SENTINEL: Int = Int.MAX_VALUE
 
 private val CONTEXT_LIMIT_PRESETS = (100_000..1_000_000 step 100_000).toList()
+
+/**
+ * [T-android-group-time-routing] Editor for one time window: optional label,
+ * weekdays, a start/end clock in CST, and the subset of this group's members
+ * that should serve during it (checked order follows the group order).
+ */
+@Composable
+private fun TimeRuleEditorDialog(
+    initial: GroupTimeRule?,
+    memberIds: List<String>,
+    labelOf: (String) -> String,
+    onDismiss: () -> Unit,
+    onSave: (GroupTimeRule) -> Unit,
+) {
+    var name by remember { mutableStateOf(initial?.name ?: "") }
+    var days by remember { mutableStateOf(initial?.days?.toSet() ?: emptySet()) }
+    var startText by remember { mutableStateOf(GroupTimeRule.formatMinute(initial?.startMinute ?: 9 * 60)) }
+    var endText by remember { mutableStateOf(GroupTimeRule.formatMinute(initial?.endMinute ?: 18 * 60)) }
+    var selected by remember {
+        mutableStateOf(initial?.entryIds?.toSet() ?: emptySet())
+    }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (initial == null) "添加时段" else "编辑时段") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                SectionTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    singleLine = true,
+                    placeholder = "名称（可选），如 夜间",
+                )
+                Text("星期（不选=每天）", style = MaterialTheme.typography.labelMedium)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("一", "二", "三", "四", "五", "六", "日").forEachIndexed { idx, label ->
+                        val iso = idx + 1
+                        FilterChip(
+                            selected = iso in days,
+                            onClick = { days = if (iso in days) days - iso else days + iso },
+                            label = { Text(label, fontSize = 12.sp) },
+                        )
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    SectionTextField(
+                        value = startText,
+                        onValueChange = { startText = it },
+                        singleLine = true,
+                        fieldModifier = Modifier.weight(1f),
+                        placeholder = "09:00",
+                    )
+                    SectionTextField(
+                        value = endText,
+                        onValueChange = { endText = it },
+                        singleLine = true,
+                        fieldModifier = Modifier.weight(1f),
+                        placeholder = "18:00",
+                    )
+                }
+                Text(
+                    "时间为 CST（UTC+8）。开始晚于结束表示跨夜，例如 22:00–06:00。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text("该时段使用的模型", style = MaterialTheme.typography.labelMedium)
+                memberIds.forEach { id ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                selected = if (id in selected) selected - id else selected + id
+                            },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(checked = id in selected, onCheckedChange = null)
+                        Text(labelOf(id), style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+                error?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        },
+        confirmButton = {
+            MinisTextButton(onClick = {
+                val start = GroupTimeRule.parseMinute(startText)
+                val end = GroupTimeRule.parseMinute(endText)
+                val picked = memberIds.filter { it in selected }
+                when {
+                    start == null || end == null -> error = "时间格式应为 HH:mm，例如 09:00"
+                    start == end -> error = "开始与结束时间不能相同"
+                    picked.isEmpty() -> error = "至少选择一个模型"
+                    else -> onSave(
+                        GroupTimeRule(
+                            id = initial?.id ?: GroupTimeRule().id,
+                            name = name.trim(),
+                            days = days.sorted(),
+                            startMinute = start,
+                            endMinute = end,
+                            entryIds = picked,
+                        ),
+                    )
+                }
+            }) { Text(stringResource(R.string.common_save)) }
+        },
+        dismissButton = {
+            MinisTextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel)) }
+        },
+    )
+}
 
 private fun formatPresetLabel(tokens: Int): String =
     if (tokens >= 1_000_000) "${tokens / 1_000_000}M" else "${tokens / 1_000}K"
